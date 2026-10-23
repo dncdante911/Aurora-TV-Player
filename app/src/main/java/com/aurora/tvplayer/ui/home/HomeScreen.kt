@@ -1,7 +1,9 @@
 package com.aurora.tvplayer.ui.home
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,6 +34,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -39,7 +43,6 @@ import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.Screen
 import com.aurora.tvplayer.ui.UiEvent
-import com.aurora.tvplayer.ui.components.AuroraButton
 import com.aurora.tvplayer.ui.components.InitialFocus
 import com.aurora.tvplayer.ui.components.SourceCard
 import com.aurora.tvplayer.ui.components.VideoCard
@@ -62,104 +65,119 @@ fun HomeScreen(vm: MainViewModel) {
     InitialFocus(memory, firstSource)
     LaunchedEffect(Unit) { vm.refreshLastFolder() }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 22.dp, bottom = 40.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+    Column(Modifier.fillMaxSize()) {
+        // Fixed, outside the scrolling list: focusing the first card can never push it off screen.
+        TopBar()
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 40.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item(key = "banner") {
+                Image(
+                    painterResource(R.drawable.aurora_tv_banner), "Aurora TV",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.padding(horizontal = 48.dp).fillMaxWidth().height(92.dp).clip(RoundedCornerShape(16.dp)),
+                )
+            }
+            item(key = "sources") {
+                Column(Modifier.padding(horizontal = 48.dp)) {
+                    Text("Выберите источник", style = MaterialTheme.typography.headlineSmall, color = Aurora.white)
+                    Text("USB, папки компьютера и сетевые ссылки", style = MaterialTheme.typography.bodyMedium, color = Aurora.muted)
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        SourceCard(Icons.Usb, "USB / папки", "Встроенный проводник", { vm.open(Screen.Files()) },
+                            Modifier.weight(1f).focusRequester(firstSource).remembered(memory, "src:usb"))
+                        SourceCard(Icons.Network, "Домашняя сеть", "Папки ПК и NAS · SMB", { vm.open(Screen.Network) },
+                            Modifier.weight(1f).remembered(memory, "src:smb"))
+                        SourceCard(Icons.Link, "Ссылка", "HTTP · HLS · DASH", vm::askLink, Modifier.weight(1f).remembered(memory, "src:link"))
+                        SourceCard(Icons.Mic, "Голос", "RU · УКР · EN", vm::chooseVoiceLanguage, Modifier.weight(1f).remembered(memory, "src:voice"))
+                    }
+                }
+            }
+
+            if (history.isNotEmpty()) item(key = "continue") {
+                Section("Продолжить просмотр", Media.plural(history.size, "видео", "видео", "видео")) {
+                    LazyRow(contentPadding = RowPadding, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                        items(history.take(15), key = { it.uri }) { entry ->
+                            val progress = remember(entry.uri, revision) { vm.playback.progress(entry.uri) }
+                            VideoCard(
+                                title = entry.title,
+                                subtitle = when {
+                                    progress.watched -> "Просмотрено"
+                                    progress.started && progress.durationMs > 0 -> Media.remaining(progress.durationMs - progress.positionMs)
+                                    else -> sourceLabel(entry.uri)
+                                },
+                                progress = progress.takeIf { it.started && it.durationMs > 0 }?.fraction,
+                                watched = progress.watched,
+                                onClick = { vm.resume(entry) },
+                                onLongClick = { vm.historyActions(entry) },
+                                modifier = Modifier.remembered(memory, "history:${entry.uri}"),
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (vm.folderVideos.isNotEmpty()) item(key = "folder") {
+                Section("Последняя папка · ${vm.folderName.orEmpty()}", Media.plural(vm.folderVideos.size, "видео", "видео", "видео")) {
+                    LazyRow(contentPadding = RowPadding, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                        itemsIndexed(vm.folderVideos, key = { _, video -> video.uri }) { index, video ->
+                            val progress = remember(video.uri, revision) { vm.playback.progress(video.uri) }
+                            VideoCard(
+                                title = video.title,
+                                subtitle = when {
+                                    progress.watched -> "Просмотрено"
+                                    progress.started && progress.durationMs > 0 -> Media.remaining(progress.durationMs - progress.positionMs)
+                                    else -> "${index + 1} из ${vm.folderVideos.size}"
+                                },
+                                progress = progress.takeIf { it.started && it.durationMs > 0 }?.fraction,
+                                watched = progress.watched,
+                                width = 210.dp,
+                                onClick = { vm.playFolderVideo(index) },
+                                modifier = Modifier.remembered(memory, "folder:${video.uri}"),
+                            )
+                        }
+                    }
+                }
+            }
+
+            item(key = "more") {
+                Section("Ещё", null) {
+                    Row(Modifier.padding(RowPadding), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        vm.folderName?.let { name ->
+                            SourceCard(Icons.Folder, "Последняя папка", name, { vm.open(Screen.Files(vm.playback.lastFolder)) },
+                                Modifier.weight(1f).remembered(memory, "more:folder"), compact = true)
+                        }
+                        SourceCard(Icons.FileOpen, "Открыть файл", "Системный выбор файла", { vm.send(UiEvent.PickFile) },
+                            Modifier.weight(1f).remembered(memory, "more:file"), compact = true)
+                        SourceCard(Icons.Volume, "Звук и HDR", "Dolby Vision, DTS, оптика", vm::showSoundHelp,
+                            Modifier.weight(1f).remembered(memory, "more:sound"), compact = true)
+                        SourceCard(Icons.Tv, "Мой телевизор", "Настройки и возможности", { vm.open(Screen.Device) },
+                            Modifier.weight(1f).remembered(memory, "more:device"), compact = true)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopBar() {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 48.dp, end = 48.dp, top = 30.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        item(key = "top") {
-            Row(Modifier.padding(horizontal = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                Image(painterResource(R.drawable.aurora_tv_logo), null, Modifier.size(30.dp))
-                Spacer(Modifier.width(12.dp))
-                Text("AURORA TV", style = MaterialTheme.typography.labelSmall.copy(letterSpacing = MaterialTheme.typography.labelSmall.letterSpacing * 2), color = Aurora.cyan)
-                Spacer(Modifier.width(28.dp))
-                Text("ВАШ КИНОЗАЛ", style = MaterialTheme.typography.labelSmall, color = Aurora.mint.copy(alpha = 0.8f))
-                Spacer(Modifier.weight(1f))
-                Clock()
-            }
+        Box(Modifier.size(44.dp).background(Aurora.cyan.copy(alpha = 0.12f), CircleShape), contentAlignment = Alignment.Center) {
+            Image(painterResource(R.drawable.aurora_tv_logo), null, Modifier.size(32.dp))
         }
-        item(key = "banner") {
-            Image(
-                painterResource(R.drawable.aurora_tv_banner), "Aurora TV",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.padding(horizontal = 48.dp).fillMaxWidth().height(96.dp).clip(RoundedCornerShape(16.dp)),
-            )
+        Spacer(Modifier.width(14.dp))
+        Column {
+            Text("AURORA TV", style = MaterialTheme.typography.titleLarge.copy(letterSpacing = 4.sp), color = Aurora.white)
+            Text("ВАШ КИНОЗАЛ", style = MaterialTheme.typography.labelSmall, color = Aurora.mint.copy(alpha = 0.85f))
         }
-        item(key = "sources") {
-            Column(Modifier.padding(horizontal = 48.dp)) {
-                Text("Выберите источник", style = MaterialTheme.typography.headlineSmall, color = Aurora.white)
-                Text("USB, папки компьютера и сетевые ссылки", style = MaterialTheme.typography.bodyMedium, color = Aurora.muted)
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    SourceCard(Icons.Usb, "USB / папки", "Встроенный проводник", { vm.open(Screen.Files()) },
-                        Modifier.weight(1f).focusRequester(firstSource).remembered(memory, "src:usb"))
-                    SourceCard(Icons.Network, "Домашняя сеть", "Папки ПК и NAS · SMB", { vm.open(Screen.Network) },
-                        Modifier.weight(1f).remembered(memory, "src:smb"))
-                    SourceCard(Icons.Link, "Ссылка", "HTTP · HLS · DASH", vm::askLink, Modifier.weight(1f).remembered(memory, "src:link"))
-                    SourceCard(Icons.Mic, "Голос", "RU · УКР · EN", vm::chooseVoiceLanguage, Modifier.weight(1f).remembered(memory, "src:voice"))
-                }
-            }
-        }
-
-        if (history.isNotEmpty()) item(key = "continue") {
-            Section("Продолжить просмотр", Media.plural(history.size, "видео", "видео", "видео")) {
-                LazyRow(contentPadding = RowPadding, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                    items(history.take(15), key = { it.uri }) { entry ->
-                        val progress = remember(entry.uri, revision) { vm.playback.progress(entry.uri) }
-                        VideoCard(
-                            title = entry.title,
-                            subtitle = when {
-                                progress.watched -> "Просмотрено"
-                                progress.started && progress.durationMs > 0 -> Media.remaining(progress.durationMs - progress.positionMs)
-                                else -> sourceLabel(entry.uri)
-                            },
-                            progress = progress.takeIf { it.started && it.durationMs > 0 }?.fraction,
-                            watched = progress.watched,
-                            onClick = { vm.resume(entry) },
-                            onLongClick = { vm.historyActions(entry) },
-                            modifier = Modifier.remembered(memory, "history:${entry.uri}"),
-                        )
-                    }
-                }
-            }
-        }
-
-        val folder = vm.folderName
-        if (folder != null) item(key = "folder") {
-            Section("Последняя папка · $folder", if (vm.folderVideos.isEmpty()) null else Media.plural(vm.folderVideos.size, "видео", "видео", "видео")) {
-                LazyRow(contentPadding = RowPadding, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                    item(key = "open-folder") {
-                        AuroraButton("Открыть папку", icon = Icons.Folder, accent = true,
-                            onClick = { vm.open(Screen.Files(vm.playback.lastFolder)) },
-                            modifier = Modifier.padding(top = 40.dp).remembered(memory, "folder:open"))
-                    }
-                    itemsIndexed(vm.folderVideos, key = { _, video -> video.uri }) { index, video ->
-                        val progress = remember(video.uri, revision) { vm.playback.progress(video.uri) }
-                        VideoCard(
-                            title = video.title,
-                            subtitle = when {
-                                progress.watched -> "Просмотрено"
-                                progress.started && progress.durationMs > 0 -> Media.remaining(progress.durationMs - progress.positionMs)
-                                else -> "${index + 1} из ${vm.folderVideos.size}"
-                            },
-                            progress = progress.takeIf { it.started && it.durationMs > 0 }?.fraction,
-                            watched = progress.watched,
-                            width = 210.dp,
-                            onClick = { vm.playFolderVideo(index) },
-                            modifier = Modifier.remembered(memory, "folder:${video.uri}"),
-                        )
-                    }
-                }
-            }
-        }
-
-        item(key = "tools") {
-            Row(Modifier.padding(horizontal = 48.dp).padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AuroraButton("Открыть файл", icon = Icons.FileOpen, onClick = { vm.send(UiEvent.PickFile) }, modifier = Modifier.weight(1f).remembered(memory, "tool:file"))
-                AuroraButton("Звук, Dolby Vision и форматы", icon = Icons.Volume, onClick = vm::showSoundHelp, modifier = Modifier.weight(1.4f).remembered(memory, "tool:sound"))
-                AuroraButton("Мой телевизор и настройки", icon = Icons.Tv, onClick = { vm.open(Screen.Device) }, modifier = Modifier.weight(1.4f).remembered(memory, "tool:device"))
-            }
-        }
+        Spacer(Modifier.weight(1f))
+        Clock()
     }
 }
 
@@ -194,5 +212,5 @@ private fun Clock() {
             delay(60_000 - System.currentTimeMillis() % 60_000)
         }
     }
-    Text(now, style = MaterialTheme.typography.titleMedium, color = Aurora.muted)
+    Text(now, style = MaterialTheme.typography.headlineSmall, color = Aurora.white)
 }

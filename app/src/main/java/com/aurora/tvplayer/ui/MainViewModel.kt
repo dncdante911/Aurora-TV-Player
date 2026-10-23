@@ -36,6 +36,7 @@ sealed interface Screen {
     data class Files(val initialFolder: String? = null) : Screen
     data object Network : Screen
     data object Device : Screen
+    data object Capabilities : Screen
 }
 
 /** Things only the activity can do. */
@@ -107,7 +108,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshLastFolder() {
         val path = playback.lastFolder ?: return
         if (path == scannedFolder && folderVideos.isNotEmpty()) return
-        folderName = File(path).name
+        folderName = friendlyFolderName(File(path))
         viewModelScope.launch {
             val found = withContext(Dispatchers.IO) {
                 val folder = File(path)
@@ -119,6 +120,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             scannedFolder = path
             folderVideos = found.orEmpty()
+        }
+    }
+
+    /** A disk root is named by its volume id ("CA44AF7444AF6245", "1A2B-3C4D"); show what it is instead. */
+    private fun friendlyFolderName(folder: File): String {
+        val parent = folder.parentFile?.absolutePath
+        return when {
+            parent == "/storage/emulated" -> "Память ТВ"
+            parent == "/storage" && Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}|[0-9A-Fa-f]{8,16}").matches(folder.name) -> "USB-накопитель"
+            else -> folder.name
         }
     }
 

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -57,6 +58,7 @@ import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.Icon
+import androidx.tv.material3.LocalContentColor
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
@@ -143,23 +145,37 @@ fun RoundButton(
     }
 }
 
-/** Big source card of the home screen, the most recognizable element of Aurora TV. */
+/**
+ * Source card of the home screen, the most recognizable element of Aurora TV: an icon badge,
+ * a title and a hint. [compact] is the smaller tile of the "Ещё" row in the same style.
+ */
 @Composable
-fun SourceCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun SourceCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
     Surface(
         onClick = onClick,
-        modifier = modifier.height(108.dp),
+        modifier = modifier.height(if (compact) 78.dp else 112.dp),
         shape = ClickableSurfaceDefaults.shape(CardShape),
-        colors = auroraColors(container = Color(0xFF0F3450)),
-        border = auroraBorder(CardShape, Color(0xFF2A7FA6)),
+        colors = auroraColors(container = Aurora.panel.copy(alpha = 0.92f)),
+        border = auroraBorder(CardShape, Aurora.line),
         glow = focusGlow,
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
     ) {
-        Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.Center) {
-            Icon(icon, null, Modifier.size(28.dp))
-            Spacer(Modifier.height(8.dp))
-            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp))
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = if (compact) 14.dp else 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 16.dp),
+        ) {
+            val badge = if (compact) 42.dp else 54.dp
+            Box(
+                Modifier.size(badge).background(LocalContentColor.current.copy(alpha = 0.12f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, null, Modifier.size(badge * 0.5f))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(title, style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = LocalContentColor.current.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }

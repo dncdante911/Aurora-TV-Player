@@ -14,6 +14,7 @@ import com.aurora.tvplayer.ui.browser.FilesScreen
 import com.aurora.tvplayer.ui.browser.NetworkScreen
 import com.aurora.tvplayer.ui.components.DialogHost
 import com.aurora.tvplayer.ui.components.MessageBar
+import com.aurora.tvplayer.ui.device.CapabilitiesScreen
 import com.aurora.tvplayer.ui.device.DeviceScreen
 import com.aurora.tvplayer.ui.home.HomeScreen
 import com.aurora.tvplayer.ui.theme.AuroraBackground
@@ -32,6 +33,7 @@ fun AppRoot(vm: MainViewModel) {
                 is Screen.Files -> FilesScreen(vm, screen.initialFolder)
                 Screen.Network -> NetworkScreen(vm)
                 Screen.Device -> DeviceScreen(vm)
+                Screen.Capabilities -> CapabilitiesScreen(vm)
             }
         }
         vm.message?.let { MessageBar(it, Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp)) }

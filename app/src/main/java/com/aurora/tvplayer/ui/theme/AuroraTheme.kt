@@ -42,7 +42,7 @@ object Aurora {
     val warn = Color(0xFFF2C14E)
     val bad = Color(0xFFFF7A7A)
 
-    val backdrop = Brush.verticalGradient(listOf(Color(0xFF071522), Color(0xFF0E2236), Color(0xFF15304C)))
+    val backdrop = Brush.verticalGradient(listOf(Color(0xFF06111D), Color(0xFF0A1B2C), Color(0xFF0F2740)))
     val scrimBottom = Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC050E18), Color(0xF2050E18)))
     val scrimTop = Brush.verticalGradient(listOf(Color(0xE6050E18), Color.Transparent))
     val cardGradient = Brush.linearGradient(listOf(Color(0xFF0F3A57), Color(0xFF122C46)))
