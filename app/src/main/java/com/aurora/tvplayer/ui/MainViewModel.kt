@@ -1,0 +1,221 @@
+package com.aurora.tvplayer.ui
+
+import android.app.Application
+import android.net.Uri
+import android.os.Build
+import androidx.core.net.toUri
+import android.os.Environment
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.aurora.tvplayer.aurora
+import com.aurora.tvplayer.data.HistoryEntry
+import com.aurora.tvplayer.data.Media
+import com.aurora.tvplayer.net.SmbConnection
+import com.aurora.tvplayer.player.PlayItem
+import com.aurora.tvplayer.player.PlayRequest
+import com.aurora.tvplayer.ui.components.DialogAction
+import com.aurora.tvplayer.ui.components.DialogSpec
+import com.aurora.tvplayer.ui.components.FocusMemory
+import com.aurora.tvplayer.ui.theme.Icons
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.Locale
+
+sealed interface Screen {
+    data object Home : Screen
+    data class Files(val initialFolder: String? = null) : Screen
+    data object Network : Screen
+    data object Device : Screen
+}
+
+/** Things only the activity can do. */
+sealed interface UiEvent {
+    data class Play(val request: PlayRequest) : UiEvent
+    data object PickFile : UiEvent
+    data class Voice(val language: String) : UiEvent
+    data class RequestStorageAccess(val volume: File) : UiEvent
+    data object OpenAppSettings : UiEvent
+}
+
+data class FolderVideo(val uri: String, val title: String)
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val app = application.aurora
+    val playback = app.playback
+    val settings = app.settings
+
+    val stack = mutableStateListOf<Screen>(Screen.Home)
+    val current: Screen get() = stack.last()
+
+    var dialog by mutableStateOf<DialogSpec?>(null)
+        private set
+    var message by mutableStateOf<String?>(null)
+        private set
+    private var messageJob: Job? = null
+
+    /** Videos of the last opened USB folder, shown on the home screen. */
+    var folderVideos by mutableStateOf<List<FolderVideo>>(emptyList())
+        private set
+    var folderName by mutableStateOf<String?>(null)
+        private set
+    private var scannedFolder: String? = null
+
+    private val events = Channel<UiEvent>(Channel.BUFFERED)
+    val uiEvents = events.receiveAsFlow()
+
+    val homeFocus = FocusMemory()
+
+    fun open(screen: Screen) {
+        if (screen == current) return
+        if (screen == Screen.Home) {
+            stack.clear()
+            stack.add(Screen.Home)
+        } else stack.add(screen)
+    }
+
+    fun back(): Boolean {
+        if (stack.size <= 1) return false
+        stack.removeAt(stack.lastIndex)
+        return true
+    }
+
+    fun show(spec: DialogSpec) { dialog = spec }
+    fun dismissDialog() { dialog = null }
+
+    fun toast(text: String) {
+        message = text
+        messageJob?.cancel()
+        messageJob = viewModelScope.launch {
+            delay(3_000)
+            message = null
+        }
+    }
+
+    fun send(event: UiEvent) { events.trySend(event) }
+
+    /** Reads the last USB folder once per change; never crawls the whole disk at start. */
+    fun refreshLastFolder() {
+        val path = playback.lastFolder ?: return
+        if (path == scannedFolder && folderVideos.isNotEmpty()) return
+        folderName = File(path).name
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) {
+                val folder = File(path)
+                val allowed = Build.VERSION.SDK_INT < 30 || runCatching { Environment.isExternalStorageManager(folder) }.getOrDefault(false)
+                if (!allowed) return@withContext null
+                folder.listFiles()?.filter { it.isFile && Media.isVideo(it.name) }
+                    ?.sortedWith { a, b -> Media.naturalOrder.compare(a.name, b.name) }
+                    ?.map { FolderVideo(Uri.fromFile(it).toString(), Media.title(it.name)) }
+            }
+            scannedFolder = path
+            folderVideos = found.orEmpty()
+        }
+    }
+
+    fun playFolderVideo(index: Int) {
+        val items = folderVideos.map { PlayItem(it.uri, it.title) }
+        if (items.isNotEmpty()) send(UiEvent.Play(PlayRequest(items, index, playback.lastFolder)))
+    }
+
+    /** Continue a history entry with its folder as the playlist, so the next episode follows. */
+    fun resume(entry: HistoryEntry) {
+        if (entry.uri.startsWith("smb://") && !SmbConnection.canOpen(entry.uri)) {
+            toast("Сначала подключитесь к сетевой папке")
+            open(Screen.Network)
+            return
+        }
+        viewModelScope.launch {
+            val request = withContext(Dispatchers.IO) { playlistAround(entry) }
+            send(UiEvent.Play(request))
+        }
+    }
+
+    private fun playlistAround(entry: HistoryEntry): PlayRequest {
+        val single = PlayRequest(listOf(PlayItem(entry.uri, entry.title)), 0, entry.folder)
+        val items: List<PlayItem> = runCatching {
+            when {
+                entry.uri.startsWith("file:") -> {
+                    val folder = entry.folder?.let(::File) ?: entry.uri.toUri().path?.let { File(it).parentFile } ?: return single
+                    folder.listFiles()?.filter { it.isFile && Media.isVideo(it.name) }
+                        ?.sortedWith { a, b -> Media.naturalOrder.compare(a.name, b.name) }
+                        ?.map { PlayItem(Uri.fromFile(it).toString(), Media.title(it.name)) }
+                }
+                entry.uri.startsWith("smb://") -> {
+                    val session = SmbConnection.active ?: return single
+                    val parent = session.parentOf(entry.uri) ?: session.rootUrl
+                    session.list(parent).filter { it.video }.map { PlayItem(it.url, Media.title(it.name)) }
+                }
+                else -> null
+            }
+        }.getOrNull().orEmpty()
+        val index = items.indexOfFirst { it.uri == entry.uri }
+        return if (index >= 0) PlayRequest(items, index, entry.folder) else single
+    }
+
+    fun historyActions(entry: HistoryEntry) = show(DialogSpec.Message(
+        title = entry.title,
+        text = "Что сделать с этим видео?",
+        actions = listOf(
+            DialogAction("Смотреть", Icons.Play) { resume(entry) },
+            DialogAction("Убрать из истории", Icons.Delete) {
+                playback.forget(entry.uri)
+                toast("Убрано из истории")
+            },
+        ),
+    ))
+
+    fun askLink() = show(DialogSpec.Input("Открыть сетевое видео", "https://example.com/video.m3u8", "", "Открыть") { raw ->
+        val uri = raw.trim().toUri()
+        if ((uri.scheme == "http" || uri.scheme == "https") && uri.host != null) {
+            send(UiEvent.Play(PlayRequest(listOf(PlayItem(uri.toString(), uri.lastPathSegment?.let(Media::title) ?: "Сетевое видео")))))
+        } else toast("Введите ссылку http или https")
+    })
+
+    fun chooseVoiceLanguage() = show(DialogSpec.Choice("Голосовая команда · язык", listOf("Русский", "Українська", "English")) { index ->
+        send(UiEvent.Voice(listOf("ru-RU", "uk-UA", "en-US")[index]))
+    })
+
+    fun handleVoice(spoken: String) {
+        val command = spoken.lowercase(Locale.ROOT).trim()
+        fun has(vararg words: String) = words.any { command.contains(it) }
+        when {
+            has("сеть", "сетев", "мереж", "nas", "network", "компьютер") -> open(Screen.Network)
+            has("провод", "провід", "папк", "folder", "browse", "usb", "флешк") -> open(Screen.Files())
+            has("ссыл", "посилан", "link", "url") -> askLink()
+            has("продолж", "продовж", "resume", "continue") ->
+                playback.history.value.firstOrNull()?.let(::resume) ?: toast("История просмотра пока пуста")
+            has("звук", "аудіо", "sound", "audio", "dolby") -> showSoundHelp()
+            has("телевизор", "телевізор", "устройств", "device") -> open(Screen.Device)
+            command in setOf("открой видео", "відкрий відео", "open video", "open file") -> send(UiEvent.PickFile)
+            else -> {
+                val query = command.replaceFirst(Regex("^(найди|найти|знайди|знайти|включи|увімкни|покажи|find|play|show)\\s+"), "").trim()
+                val inFolder = folderVideos.indexOfFirst { query.isNotEmpty() && it.title.lowercase(Locale.ROOT).contains(query) }
+                val inHistory = playback.history.value.firstOrNull { query.isNotEmpty() && it.title.lowercase(Locale.ROOT).contains(query) }
+                when {
+                    inFolder >= 0 -> playFolderVideo(inFolder)
+                    inHistory != null -> resume(inHistory)
+                    else -> toast("Не нашлось: «$spoken». Назовите файл или команду.")
+                }
+            }
+        }
+    }
+
+    fun showSoundHelp() = show(DialogSpec.Message(
+        "Звук, HDR и Dolby Vision",
+        "HDR10, HDR10+, HLG и Dolby Vision включаются системой автоматически, когда файл, декодер и экран совместимы. " +
+            "Если поток содержит отдельные HDR- и SDR-дорожки, нужную можно выбрать в плеере: «Настройки → Качество видео».\n\n" +
+            "Dolby Digital, DTS и Atmos зависят от дорожки и всей аудиоцепочки. Для саундбара по оптике выберите на ТВ " +
+            "оптический выход и формат Auto или Pass-through. Если дорожка молчит — включите PCM в настройках ТВ или выберите другую дорожку в плеере. " +
+            "Оптика не передаёт Dolby TrueHD/Atmos и многоканальный PCM. На скорости 1× сквозная передача звука работает надёжнее всего.",
+    ))
+}
