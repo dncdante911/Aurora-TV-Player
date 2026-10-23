@@ -28,6 +28,8 @@ data class SettingsState(
     val backStepSec: Int = 10,
     val decoder: DecoderPreference = DecoderPreference.AUTO,
     val frameRate: FrameRateMode = FrameRateMode.SEAMLESS,
+    val watchedMinutes: Int = 0,
+    val supportReminderShown: Boolean = false,
 )
 
 /** App preferences; track choices stay in "library" where the player always kept them. */
@@ -41,6 +43,8 @@ class AppSettings(context: Context) {
             backStepSec = prefs.getInt("back_step", 10),
             decoder = runCatching { DecoderPreference.valueOf(prefs.getString("decoder", null)!!) }.getOrDefault(DecoderPreference.AUTO),
             frameRate = runCatching { FrameRateMode.valueOf(prefs.getString("frame_rate", null)!!) }.getOrDefault(FrameRateMode.SEAMLESS),
+            watchedMinutes = prefs.getInt("watched_minutes", 0),
+            supportReminderShown = prefs.getBoolean("support_reminder_shown", false),
         )
     )
     val state: StateFlow<SettingsState> = mutableState.asStateFlow()
@@ -51,6 +55,8 @@ class AppSettings(context: Context) {
     fun setForwardStep(seconds: Int) = change { it.copy(forwardStepSec = seconds) }
     fun setDecoder(value: DecoderPreference) = change { it.copy(decoder = value) }
     fun setFrameRate(value: FrameRateMode) = change { it.copy(frameRate = value) }
+    fun addWatchedMinute() = change { it.copy(watchedMinutes = it.watchedMinutes + 1) }
+    fun markSupportReminderShown() = change { it.copy(supportReminderShown = true) }
 
     private fun change(transform: (SettingsState) -> SettingsState) {
         mutableState.update(transform)
@@ -62,6 +68,8 @@ class AppSettings(context: Context) {
             putInt("back_step", s.backStepSec)
             putString("decoder", s.decoder.name)
             putString("frame_rate", s.frameRate.name)
+            putInt("watched_minutes", s.watchedMinutes)
+            putBoolean("support_reminder_shown", s.supportReminderShown)
         }
     }
 }

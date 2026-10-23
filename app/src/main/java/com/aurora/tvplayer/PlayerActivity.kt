@@ -86,6 +86,7 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     private var videoDecoder: String? = null
     private var audioDecoder: String? = null
     private var lastSavedAt = 0L
+    private var playedMs = 0L
     private var resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
     private var externalSubtitle: MediaItem.SubtitleConfiguration? = null
     private var decoders: DecoderManager? = null
@@ -261,6 +262,13 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         val autoplay = !exo.pauseAtEndOfMediaItems
         ui.nextTitle = if (autoplay && exo.hasNextMediaItem() && ui.duration > 0 && remaining in 1..20_000) request.items.getOrNull(exo.nextMediaItemIndex)?.title else null
         if (exo.playbackState == Player.STATE_READY && System.currentTimeMillis() - lastSavedAt > 5_000) savePosition()
+        if (exo.isPlaying) {
+            playedMs += 500
+            if (playedMs >= 60_000) {
+                playedMs = 0
+                aurora.settings.addWatchedMinute()
+            }
+        }
     }
 
     private fun savePosition() {

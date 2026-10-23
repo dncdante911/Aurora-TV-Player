@@ -38,6 +38,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.aurora.tvplayer.R
 import com.aurora.tvplayer.data.Media
+import com.aurora.tvplayer.data.Support
 import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.Screen
 import com.aurora.tvplayer.ui.UiEvent
@@ -61,7 +62,10 @@ fun HomeScreen(vm: MainViewModel) {
     val memory = vm.homeFocus
     val firstSource = remember { FocusRequester() }
     InitialFocus(memory, firstSource)
-    LaunchedEffect(Unit) { vm.refreshLastFolder() }
+    LaunchedEffect(Unit) {
+        vm.refreshLastFolder()
+        vm.maybeRemindSupport()
+    }
 
     Column(Modifier.fillMaxSize()) {
         // The banner is the fixed header, as in 2.x: outside the scrolling list, so focusing a card
@@ -147,6 +151,10 @@ fun HomeScreen(vm: MainViewModel) {
                             Modifier.weight(1f).remembered(memory, "more:sound"), compact = true)
                         SourceCard(Icons.Tv, "Мой телевизор", "Настройки и возможности", { vm.open(Screen.Device) },
                             Modifier.weight(1f).remembered(memory, "more:device"), compact = true)
+                        if (Support.available) {
+                            SourceCard(Icons.Favorite, "Поддержать", "Спасибо автору", { vm.open(Screen.Support) },
+                                Modifier.weight(1f).remembered(memory, "more:support"), compact = true)
+                        }
                     }
                 }
             }

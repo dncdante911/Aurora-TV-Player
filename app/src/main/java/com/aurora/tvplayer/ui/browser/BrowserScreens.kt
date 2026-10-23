@@ -69,7 +69,9 @@ fun FilesScreen(vm: MainViewModel, initialFolder: String?) {
     BrowserLayout(
         section = "Файлы",
         title = browser.title,
-        subtitle = browser.folder?.absolutePath?.let { path -> browser.root?.let { path.removePrefix(it.parent ?: "").trimStart(File.separatorChar) } },
+        subtitle = browser.folder?.absolutePath?.let { path ->
+            browser.root?.let { base -> (listOf(browser.rootName) + path.removePrefix(base.absolutePath).split(File.separatorChar).filter { it.isNotEmpty() }).joinToString("  /  ") }
+        },
         memory = browser.focus,
         firstTool = firstTool,
         reloadKey = browser.folder?.absolutePath ?: "volumes",
@@ -138,7 +140,7 @@ fun NetworkScreen(vm: MainViewModel) {
 }
 
 @Composable
-private fun BrowserLayout(
+internal fun BrowserLayout(
     section: String,
     title: String,
     subtitle: String?,

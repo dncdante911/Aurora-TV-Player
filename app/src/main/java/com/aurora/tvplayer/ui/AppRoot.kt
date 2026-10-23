@@ -17,6 +17,7 @@ import com.aurora.tvplayer.ui.components.MessageBar
 import com.aurora.tvplayer.ui.device.CapabilitiesScreen
 import com.aurora.tvplayer.ui.device.DeviceScreen
 import com.aurora.tvplayer.ui.home.HomeScreen
+import com.aurora.tvplayer.ui.support.SupportScreen
 import com.aurora.tvplayer.ui.theme.AuroraBackground
 
 @Composable
@@ -34,6 +35,7 @@ fun AppRoot(vm: MainViewModel) {
                 Screen.Network -> NetworkScreen(vm)
                 Screen.Device -> DeviceScreen(vm)
                 Screen.Capabilities -> CapabilitiesScreen(vm)
+                Screen.Support -> SupportScreen()
             }
         }
         vm.message?.let { MessageBar(it, Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp)) }

@@ -37,6 +37,7 @@ sealed interface Screen {
     data object Network : Screen
     data object Device : Screen
     data object Capabilities : Screen
+    data object Support : Screen
 }
 
 /** Things only the activity can do. */
@@ -219,6 +220,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    /** One gentle thank-you note after ~10 hours of watching; never shown again. */
+    fun maybeRemindSupport() {
+        val s = settings.current
+        if (!com.aurora.tvplayer.data.Support.available || s.supportReminderShown || s.watchedMinutes < com.aurora.tvplayer.data.Support.REMINDER_AFTER_MINUTES || dialog != null) return
+        settings.markSupportReminderShown()
+        show(DialogSpec.Message(
+            "Нравится Aurora TV?",
+            "Вы посмотрели с плеером уже больше ${s.watchedMinutes / 60} часов. Aurora TV бесплатный и без рекламы — " +
+                "если хотите, можно поддержать автора. Это сообщение больше не появится, а поддержать можно в любой момент в «Мой телевизор».",
+            listOf(DialogAction("Поддержать автора", Icons.Favorite) { open(Screen.Support) }),
+        ))
     }
 
     fun showSoundHelp() = show(DialogSpec.Message(

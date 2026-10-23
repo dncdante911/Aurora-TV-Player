@@ -52,6 +52,9 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
         private set
     var root by mutableStateOf<File?>(null)
         private set
+    /** Human name of the open disk ("USB-накопитель", "Память ТВ" or the volume label). */
+    var rootName by mutableStateOf("")
+        private set
     var folder by mutableStateOf<File?>(null)
         private set
     var entries by mutableStateOf<List<BrowserEntry>>(emptyList())
@@ -146,6 +149,7 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
         }
         pendingVolume = null
         root = dir
+        rootName = entries.firstOrNull { it.key == dir.absolutePath }?.name ?: "Диск"
         app.getSharedPreferences("library", 0).edit { putString("folder_path", dir.absolutePath) }
         val target = pendingTarget?.takeIf { it.isDirectory } ?: dir
         pendingTarget = null
@@ -164,7 +168,7 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
         job?.cancel()
         query = ""
         folder = dir
-        title = if (dir == base) entries.firstOrNull { it.key == base.absolutePath }?.name ?: "Папки на диске" else dir.name
+        title = if (dir == base) rootName.ifEmpty { "Папки на диске" } else dir.name
         playback.lastFolder = dir.absolutePath
         loading = true
         message = null

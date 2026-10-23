@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,6 +49,7 @@ import com.aurora.tvplayer.data.DeviceReport
 import com.aurora.tvplayer.data.FrameRateMode
 import com.aurora.tvplayer.data.ReportSection
 import com.aurora.tvplayer.data.ReportTable
+import com.aurora.tvplayer.data.Support
 import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.Screen
 import com.aurora.tvplayer.ui.components.AuroraRow
@@ -136,6 +138,10 @@ fun DeviceScreen(vm: MainViewModel) {
                 vm.toast("История очищена")
             }
         }
+        if (Support.available) item {
+            Setting(Icons.Favorite, "Поддержать автора", "QR-код для благодарности: плеер бесплатный и без рекламы.",
+                value = "Открыть", modifier = Modifier.remembered(memory, "support")) { vm.open(Screen.Support) }
+        }
         item {
             Setting(Icons.Volume, "Звук, HDR и Dolby Vision", "Как настроить оптику, Pass-through и HDR.", modifier = Modifier.remembered(memory, "sound")) {
                 vm.showSoundHelp()
@@ -152,7 +158,7 @@ fun DeviceScreen(vm: MainViewModel) {
 fun CapabilitiesScreen(vm: MainViewModel) {
     val context = LocalContext.current
     var report by remember { mutableStateOf<List<ReportSection>?>(null) }
-    var refresh by remember { mutableStateOf(0) }
+    var refresh by remember { mutableIntStateOf(0) }
     val memory = remember { FocusMemory() }
     val first = remember { FocusRequester() }
     InitialFocus(memory, first, trigger = report != null)
