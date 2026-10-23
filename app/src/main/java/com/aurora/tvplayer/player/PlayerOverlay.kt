@@ -95,6 +95,8 @@ class PlayerUiState {
     var hasPrevious by mutableStateOf(false)
     var hasNext by mutableStateOf(false)
     var nextTitle by mutableStateOf<String?>(null)
+    /** The error is a decoder failure that FFmpeg may handle. */
+    var canSoftware by mutableStateOf(false)
     var forwardStepMs by mutableLongStateOf(30_000L)
     var backStepMs by mutableLongStateOf(10_000L)
     /** Bumped when the controls should take focus again (e.g. after OK on a hidden overlay). */
@@ -111,6 +113,7 @@ interface PlayerActions {
     fun subtitles()
     fun settings()
     fun retry()
+    fun softwareDecoder()
     fun errorDetails()
     fun restart()
     fun closePanel()
@@ -293,7 +296,12 @@ private fun ErrorCard(message: String, state: PlayerUiState, actions: PlayerActi
         Text(message, style = MaterialTheme.typography.bodyLarge, color = Aurora.muted)
         Spacer(Modifier.height(20.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            AuroraButton("Повторить", onClick = actions::retry, icon = Icons.Refresh, accent = true, modifier = Modifier.focusRequester(first))
+            if (state.canSoftware) {
+                AuroraButton("Программный декодер", onClick = actions::softwareDecoder, icon = Icons.Hdr, accent = true, modifier = Modifier.focusRequester(first))
+                AuroraButton("Повторить", onClick = actions::retry, icon = Icons.Refresh)
+            } else {
+                AuroraButton("Повторить", onClick = actions::retry, icon = Icons.Refresh, accent = true, modifier = Modifier.focusRequester(first))
+            }
             if (state.hasNext) AuroraButton("Следующий файл", onClick = actions::next, icon = Icons.SkipNext)
             AuroraButton("Подробнее", onClick = actions::errorDetails, icon = Icons.Info)
             AuroraButton("К файлам", onClick = actions::exit, icon = Icons.List)

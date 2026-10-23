@@ -9,16 +9,25 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.os.Build
 import android.view.Display
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegLibrary
 import java.util.Locale
 
 data class ReportRow(val label: String, val value: String, val ok: Boolean? = null)
 data class ReportSection(val title: String, val rows: List<ReportRow>)
 
 /** What the firmware declares about screen, decoders and audio outputs. Declared, not measured. */
+@OptIn(UnstableApi::class)
 object DeviceReport {
     private val VIDEO = listOf(
         "H.264" to "video/avc", "HEVC" to "video/hevc", "VP9" to "video/x-vnd.on2.vp9",
         "AV1" to "video/av01", "Dolby Vision" to "video/dolby-vision",
+    )
+    private val SIZES = listOf("720p" to (1280 to 720), "1080p" to (1920 to 1080), "1440p" to (2560 to 1440), "2160p (4K)" to (3840 to 2160))
+    private val FFMPEG_FORMATS = listOf(
+        "DTS / DTS-HD" to "audio/vnd.dts", "Dolby TrueHD" to "audio/true-hd", "AC-3" to "audio/ac3", "E-AC-3" to "audio/eac3",
+        "FLAC" to "audio/flac", "Opus" to "audio/opus", "MPEG-2 видео" to "video/mpeg2", "H.264" to "video/avc", "HEVC" to "video/hevc", "VP9" to "video/x-vnd.on2.vp9",
     )
     private val AUDIO = listOf(
         "AAC" to "audio/mp4a-latm", "AC-3" to "audio/ac3", "E-AC-3" to "audio/eac3",
@@ -65,6 +74,12 @@ object DeviceReport {
             }
         })
 
+        // As in 2.x: what the hardware decoders declare per resolution, so "will 1440p60 HEVC play?" has an answer.
+        sections += ReportSection("Аппаратное видео по разрешениям", SIZES.map { (label, size) ->
+            val supported = VIDEO.mapNotNull { (name, mime) -> supportedFps(codecs, mime, size.first, size.second).takeIf { it > 0 }?.let { "$name $it" } }
+            ReportRow(label, supported.joinToString(" · ").ifEmpty { "не заявлено" }, supported.isNotEmpty())
+        })
+
         sections += ReportSection("Аудиодекодеры", AUDIO.map { (name, mime) ->
             val ok = hasDecoder(codecs, mime)
             ReportRow(name, if (ok) "есть" else "нет", ok)
@@ -76,6 +91,14 @@ object DeviceReport {
             val formats = device.encodings.toList().mapNotNull(::encodingName).distinct()
             ReportRow(name, formats.joinToString(", ").ifEmpty { "форматы не сообщены" }, formats.isNotEmpty())
         }
+        val ffmpeg = runCatching { FfmpegLibrary.isAvailable() }.getOrDefault(false)
+        sections += ReportSection("Программные декодеры FFmpeg", buildList {
+            add(ReportRow("Библиотека", if (ffmpeg) "версия ${FfmpegLibrary.getVersion()}" else "недоступна для этого процессора", ffmpeg))
+            if (ffmpeg) FFMPEG_FORMATS.forEach { (name, mime) ->
+                val ok = runCatching { FfmpegLibrary.supportsFormat(mime) }.getOrDefault(false)
+                add(ReportRow(name, if (ok) "есть" else "нет", ok))
+            }
+        })
         sections += ReportSection("Цифровой звук (передача на ресивер)", outputs.ifEmpty { listOf(ReportRow("Выходы", "не сообщены")) })
         return sections
     }

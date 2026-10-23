@@ -33,6 +33,8 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.aurora.tvplayer.BuildConfig
 import com.aurora.tvplayer.data.AmbientLighting
+import com.aurora.tvplayer.data.DecoderPreference
+import com.aurora.tvplayer.data.FrameRateMode
 import com.aurora.tvplayer.data.DeviceReport
 import com.aurora.tvplayer.data.ReportSection
 import com.aurora.tvplayer.ui.MainViewModel
@@ -69,6 +71,20 @@ fun DeviceScreen(vm: MainViewModel) {
             Setting(Icons.Play, "Следующая серия автоматически", "После конца файла сразу запускается следующий из папки.",
                 toggle = settings.autoplayNext, modifier = Modifier.focusRequester(first).remembered(memory, "autoplay")) {
                 vm.settings.setAutoplayNext(!settings.autoplayNext)
+            }
+        }
+        item {
+            Setting(Icons.Tv, "Частота кадров экрана", settings.frameRate.detail, value = settings.frameRate.label,
+                modifier = Modifier.remembered(memory, "fps")) {
+                val all = FrameRateMode.entries
+                vm.settings.setFrameRate(all[(all.indexOf(settings.frameRate) + 1) % all.size])
+            }
+        }
+        item {
+            Setting(Icons.Hdr, "Декодеры", settings.decoder.detail, value = settings.decoder.label,
+                modifier = Modifier.remembered(memory, "decoder")) {
+                val all = DecoderPreference.entries
+                vm.settings.setDecoder(all[(all.indexOf(settings.decoder) + 1) % all.size])
             }
         }
         item {

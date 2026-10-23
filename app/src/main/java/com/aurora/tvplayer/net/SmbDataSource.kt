@@ -13,14 +13,23 @@ import java.io.IOException
 
 /**
  * Seekable read-only Media3 source over SMB. Seeking moves the file pointer instead of reading
- * up to the position, so jumping inside a 4K remux is instant and no temporary copy is made.
+ * up to the position, so jumping inside a 100 GB remux is instant and no temporary copy is made.
+ * Extractors ask for small pieces; every SMB read is a network round trip, so data is fetched in
+ * 1 MB chunks and served from memory — this is what keeps 4K60 remuxes (80–100 Mbit/s) fluid.
  */
 @OptIn(UnstableApi::class)
 class SmbDataSource private constructor() : BaseDataSource(true) {
     private var file: SmbFile? = null
     private var input: SmbRandomAccessFile? = null
     private var uri: Uri? = null
+    /** Bytes still to deliver to the player (buffered + not yet fetched). */
     private var remaining = 0L
+    /** Bytes not yet fetched from the server. */
+    private var unfetched = 0L
+    /** Allocated on the first SMB open: the routing source creates this object for every load. */
+    private var chunk: ByteArray? = null
+    private var chunkPos = 0
+    private var chunkLen = 0
     private var opened = false
 
     override fun open(dataSpec: DataSpec): Long {
@@ -36,6 +45,10 @@ class SmbDataSource private constructor() : BaseDataSource(true) {
             stream.seek(dataSpec.position)
             remaining = if (dataSpec.length == C.LENGTH_UNSET.toLong()) size - dataSpec.position
             else minOf(dataSpec.length, size - dataSpec.position)
+            unfetched = remaining
+            if (chunk == null) chunk = ByteArray(CHUNK_SIZE)
+            chunkPos = 0
+            chunkLen = 0
             uri = dataSpec.uri
             opened = true
             transferStarted(dataSpec)
@@ -49,8 +62,18 @@ class SmbDataSource private constructor() : BaseDataSource(true) {
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
-        val count = input?.read(buffer, offset, minOf(length.toLong(), remaining).toInt()) ?: return C.RESULT_END_OF_INPUT
-        if (count == -1) return C.RESULT_END_OF_INPUT
+        if (chunkPos == chunkLen) {
+            val stream = input ?: return C.RESULT_END_OF_INPUT
+            val chunk = chunk ?: return C.RESULT_END_OF_INPUT
+            val fetched = stream.read(chunk, 0, minOf(CHUNK_SIZE.toLong(), unfetched).toInt())
+            if (fetched <= 0) return C.RESULT_END_OF_INPUT
+            unfetched -= fetched
+            chunkPos = 0
+            chunkLen = fetched
+        }
+        val count = minOf(length, chunkLen - chunkPos)
+        System.arraycopy(chunk!!, chunkPos, buffer, offset, count)
+        chunkPos += count
         remaining -= count
         bytesTransferred(count)
         return count
@@ -74,6 +97,7 @@ class SmbDataSource private constructor() : BaseDataSource(true) {
     }
 
     companion object {
+        private const val CHUNK_SIZE = 1 shl 20
         val FACTORY = DataSource.Factory { SmbDataSource() }
     }
 }

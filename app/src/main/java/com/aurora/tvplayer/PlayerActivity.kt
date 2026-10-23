@@ -32,7 +32,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -40,6 +39,13 @@ import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.aurora.tvplayer.data.AmbientLighting
+import com.aurora.tvplayer.data.DecoderPreference
+import com.aurora.tvplayer.data.FrameRateMode
+import com.aurora.tvplayer.player.RefreshRate
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderManager
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderMode
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegLibrary
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.player.Panel
 import com.aurora.tvplayer.player.PanelOption
@@ -82,6 +88,12 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     private var lastSavedAt = 0L
     private var resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
     private var externalSubtitle: MediaItem.SubtitleConfiguration? = null
+    private var decoders: DecoderManager? = null
+    /** Set by "Программный декодер" on the error card; survives onStop/onStart. */
+    private var forceSoftwareVideo = false
+    private var forceSoftwareAudio = false
+    private var matchedFps = 0f
+    private var judderHintShown = false
 
     private val pickSubtitle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(::attachSubtitle) }
 
@@ -122,8 +134,21 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         val settings = aurora.settings.current
         ui.forwardStepMs = settings.forwardStepSec * 1000L
         ui.backStepMs = settings.backStepSec * 1000L
-        val exo = ExoPlayer.Builder(this, DefaultRenderersFactory(this).setEnableDecoderFallback(true))
+        // Hardware decoders first (the only path to 4K60 and Dolby Vision); FFmpeg fills the gaps
+        // for codecs the TV lacks (DTS, TrueHD, MPEG-2, VC-1 ...) or when asked explicitly.
+        val manager = DecoderManager(
+            if (forceSoftwareVideo) DecoderMode.FFMPEG else videoMode(settings.decoder),
+            if (forceSoftwareAudio) DecoderMode.FFMPEG else audioMode(settings.decoder),
+        )
+        decoders = manager
+        val renderers = NextRenderersFactory(this).setDecoderManager(manager)
+        renderers.setEnableDecoderFallback(true)
+        val exo = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(RoutingDataSource.Factory(this)))
+            .setVideoChangeFrameRateStrategy(
+                if (settings.frameRate == FrameRateMode.SEAMLESS) C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS
+                else C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF,
+            )
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .build()
@@ -143,6 +168,7 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         val saved = store.progress(request.items[startIndex].uri)
         val position = if (startPosition != C.TIME_UNSET) startPosition else if (saved.started) saved.positionMs else 0L
         exo.setMediaItems(items, startIndex, position)
+        manager.attach(exo)
         exo.prepare()
         exo.play()
         player = exo
@@ -165,6 +191,10 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         startIndex = exo.currentMediaItemIndex.coerceAtLeast(0)
         startPosition = exo.currentPosition
         ticker?.cancel()
+        decoders?.detach()
+        decoders = null
+        preferDisplayMode(0)
+        matchedFps = 0f
         session?.release()
         session = null
         playerView.player = null
@@ -187,7 +217,10 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
             showControls()
         }
 
-        override fun onTracksChanged(tracks: Tracks) = applySavedAudioTrack(tracks)
+        override fun onTracksChanged(tracks: Tracks) {
+            applySavedAudioTrack(tracks)
+            player?.videoFormat?.frameRate?.let(::matchFrameRate)
+        }
 
         override fun onPlaybackStateChanged(state: Int) {
             ui.buffering = state == Player.STATE_BUFFERING
@@ -213,6 +246,7 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
             lastError = error
             Log.e("AuroraTV", "Playback failed: ${error.errorCodeName}", error)
             ui.error = describe(error)
+            ui.canSoftware = canOfferSoftware(error)
             ui.controls = false
         }
     }
@@ -271,11 +305,11 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         }
     }
 
-    private fun hint(text: String) {
+    private fun hint(text: String, durationMs: Long = 1_800) {
         ui.hint = text
         hintJob?.cancel()
         hintJob = lifecycleScope.launch {
-            delay(1_800)
+            delay(durationMs)
             ui.hint = null
         }
     }
@@ -327,6 +361,65 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         exo.play()
     }
 
+    /** Error card action: retry the file with FFmpeg for the failed track type. */
+    override fun softwareDecoder() {
+        val manager = decoders ?: return
+        val code = lastError?.errorCode ?: return
+        if (code / 1000 == 5) {
+            forceSoftwareAudio = true
+            manager.selectAudioDecoder(DecoderMode.FFMPEG)
+        } else {
+            forceSoftwareVideo = true
+            manager.selectVideoDecoder(DecoderMode.FFMPEG)
+        }
+        hint("Программный декодер FFmpeg")
+        retry()
+    }
+
+    private fun canOfferSoftware(error: PlaybackException): Boolean {
+        val group = error.errorCode / 1000
+        return FfmpegLibrary.isAvailable() &&
+            ((group == 4 && !forceSoftwareVideo) || (group == 5 && !forceSoftwareAudio))
+    }
+
+    private fun videoMode(preference: DecoderPreference) = when (preference) {
+        DecoderPreference.AUTO -> DecoderMode.AUTO
+        DecoderPreference.HARDWARE -> DecoderMode.HARDWARE
+        DecoderPreference.SOFTWARE -> DecoderMode.FFMPEG
+    }
+
+    /** Audio stays automatic unless the TV-only mode is chosen: passthrough to the receiver must keep working. */
+    private fun audioMode(preference: DecoderPreference) =
+        if (preference == DecoderPreference.HARDWARE) DecoderMode.HARDWARE else DecoderMode.AUTO
+
+    // Screen refresh rate
+
+    @Suppress("DEPRECATION")
+    private fun screen() = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
+
+    private fun matchFrameRate(fps: Float) {
+        if (fps <= 0f || fps == matchedFps) return
+        matchedFps = fps
+        val display = screen() ?: return
+        when (aurora.settings.current.frameRate) {
+            FrameRateMode.ALWAYS -> RefreshRate.bestMode(display, fps)?.let { mode ->
+                preferDisplayMode(mode.modeId)
+                hint(String.format(Locale.ROOT, "Экран %.2f Гц под видео %.3f к/с", mode.refreshRate, fps), 3_000)
+            }
+            else -> if (!judderHintShown && RefreshRate.judders(display, fps)) {
+                judderHintShown = true
+                hint(String.format(Locale.ROOT, "Видео %.3f к/с на экране %.0f Гц может дёргаться · «Мой телевизор» → «Частота кадров»", fps, display.mode.refreshRate), 6_000)
+            }
+        }
+    }
+
+    private fun preferDisplayMode(modeId: Int) {
+        val params = window.attributes
+        if (params.preferredDisplayModeId == modeId) return
+        params.preferredDisplayModeId = modeId
+        window.attributes = params
+    }
+
     override fun restart() {
         val exo = player ?: return
         ui.ended = false
@@ -370,8 +463,8 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     private fun describe(error: PlaybackException): String = when (error.errorCode / 1000) {
         2 -> "Не удалось прочитать файл: проверьте USB-накопитель, сеть или доступ к сетевой папке."
         3 -> "Файл повреждён или его формат не поддерживается."
-        4 -> "Телевизор не смог запустить декодер для этого видео. Попробуйте другую дорожку или версию файла (например, H.264 вместо HEVC)."
-        5 -> "Не удалось вывести звук. Выберите другую аудиодорожку или включите PCM в настройках ТВ."
+        4 -> "Телевизор не смог декодировать это видео. Нажмите «Программный декодер» или выберите другую версию файла (например, H.264 вместо HEVC)."
+        5 -> "Телевизор не смог воспроизвести эту звуковую дорожку. Нажмите «Программный декодер», выберите другую дорожку или включите PCM в настройках ТВ."
         else -> "Не удалось воспроизвести видео."
     } + " (${error.errorCodeName})"
 
@@ -650,7 +743,9 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
                 append('\n')
             }
             append("Видеодекодер: ").append(videoDecoder?.let { it + acceleration(it) } ?: "ещё не запущен").append('\n')
-            append("Аудиодекодер: ").append(audioDecoder ?: "ещё не запущен").append("\n\n")
+            append("Аудиодекодер: ").append(audioDecoder ?: "ещё не запущен").append('\n')
+            decoders?.let { append("Режим: видео ").append(modeName(it.activeVideoMode)).append(", звук ").append(modeName(it.activeAudioMode)).append('\n') }
+            append("FFmpeg: ").append(if (FfmpegLibrary.isAvailable()) "доступен, версия ${FfmpegLibrary.getVersion()}" else "недоступен").append("\n\n")
             append("Аппаратные декодеры 4K/60:\n")
             listOf("H.264" to "video/avc", "HEVC" to "video/hevc", "VP9" to "video/x-vnd.on2.vp9", "AV1" to "video/av01", "Dolby Vision" to "video/dolby-vision").forEach { (name, mime) ->
                 append("• ").append(name).append(": ").append(codecSupport(mime)).append('\n')
@@ -689,6 +784,14 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
             false -> " (программный)"
             null -> ""
         }
+    }
+
+    private fun modeName(mode: DecoderMode?) = when (mode) {
+        null -> "ещё не выбран"
+        DecoderMode.AUTO -> "авто"
+        DecoderMode.HARDWARE -> "аппаратный"
+        DecoderMode.SOFTWARE -> "программный Android"
+        DecoderMode.FFMPEG -> "FFmpeg"
     }
 
     private fun dynamicRange(f: Format): String = when {
