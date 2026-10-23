@@ -1,6 +1,6 @@
 package com.aurora.tvplayer;
 
-import android.app.Activity;
+import androidx.activity.ComponentActivity;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.drawable.ColorDrawable;
@@ -24,7 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /** Read-only SMB folder browser. Local USB navigation is intentionally untouched. */
-public final class NetworkBrowserActivity extends Activity {
+public final class NetworkBrowserActivity extends ComponentActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ArrayList<SmbConnection.Entry> entries = new ArrayList<>();
     private final ArrayList<SmbConnection.Entry> visible = new ArrayList<>();
@@ -36,6 +36,7 @@ public final class NetworkBrowserActivity extends Activity {
     private ListView list;
     private BaseAdapter adapter;
     private Button connectButton;
+    private FolderUi folderUi;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -43,6 +44,7 @@ public final class NetworkBrowserActivity extends Activity {
         SmbConnection session = SmbConnection.active();
         if (session != null) {
             connectionPanel.setVisibility(View.GONE);
+            folderUi.setConnectionVisible(false);
             openFolder(session.rootUrl, "Сетевая папка");
         } else {
             status.setText("Укажите адрес сервера и имя общей папки. Компьютер и ТВ должны быть в одной сети.");
@@ -51,6 +53,40 @@ public final class NetworkBrowserActivity extends Activity {
     }
 
     private void buildUi() {
+        folderUi = new FolderUi(this, true, new FolderUi.Actions() {
+            @Override public void openDisks() { }
+            @Override public void goUp() { NetworkBrowserActivity.this.goUp(); }
+            @Override public void filter() { }
+            @Override public void search() { askSearch(); }
+            @Override public void refresh() { if (folderUrl != null) openFolder(folderUrl, title.getText().toString()); }
+            @Override public void connect() { NetworkBrowserActivity.this.connect(); }
+            @Override public void openConnection() { folderUi.setConnectionVisible(!folderUi.getConnectionVisible()); }
+            @Override public void openItem(int position) {
+                if (position < 0 || position >= visible.size()) return;
+                SmbConnection.Entry entry = visible.get(position);
+                if (entry.directory) openFolder(entry.url, entry.name);
+                else if (entry.video) play(entry);
+            }
+        });
+        setContentView(folderUi.getView());
+        title = new TextView(this);
+        status = new TextView(this);
+        connectionPanel = new LinearLayout(this);
+        hostInput = new EditText(this);
+        shareInput = new EditText(this);
+        userInput = new EditText(this);
+        passwordInput = new EditText(this);
+        connectButton = new Button(this);
+        list = new ListView(this);
+        adapter = new NetworkAdapter();
+        folderUi.setHost(getSharedPreferences("network", MODE_PRIVATE).getString("host", ""));
+        folderUi.setShare(getSharedPreferences("network", MODE_PRIVATE).getString("share", ""));
+        folderUi.setUser(getSharedPreferences("network", MODE_PRIVATE).getString("user", ""));
+        TvUi.bindText(title, folderUi::setTitle);
+        TvUi.bindText(status, folderUi::setStatus);
+    }
+
+    private void legacyBuildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(TvUi.dp(this, 42), TvUi.dp(this, 15), TvUi.dp(this, 42), TvUi.dp(this, 14));
@@ -134,16 +170,18 @@ public final class NetworkBrowserActivity extends Activity {
     }
 
     private void connect() {
-        String host = hostInput.getText().toString().trim();
-        String share = shareInput.getText().toString().trim();
-        String user = userInput.getText().toString().trim();
-        String password = passwordInput.getText().toString();
+        if (folderUi.getBusy()) return;
+        String host = folderUi.getHost().trim();
+        String share = folderUi.getShare().trim();
+        String user = folderUi.getUser().trim();
+        String password = folderUi.getPassword();
         String domain = "";
         int slash = user.indexOf('\\');
         if (slash >= 0) { domain = user.substring(0, slash); user = user.substring(slash + 1); }
         final String login = user, realm = domain;
         int request = ++requestId;
         connectButton.setEnabled(false);
+        folderUi.setBusy(true);
         status.setText("Подключаюсь к общей папке…");
         worker.execute(() -> {
             try {
@@ -152,16 +190,20 @@ public final class NetworkBrowserActivity extends Activity {
                     if (request != requestId || isFinishing()) return;
                     getSharedPreferences("network", MODE_PRIVATE).edit()
                         .putString("host", host).putString("share", share)
-                        .putString("user", userInput.getText().toString().trim()).apply();
+                        .putString("user", folderUi.getUser().trim()).apply();
                     passwordInput.setText("");
+                    folderUi.setPassword("");
                     connectButton.setEnabled(true);
+                    folderUi.setBusy(false);
                     connectionPanel.setVisibility(View.GONE);
+                    folderUi.setConnectionVisible(false);
                     openFolder(session.rootUrl, share);
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
                     if (request != requestId || isFinishing()) return;
                     connectButton.setEnabled(true);
+                    folderUi.setBusy(false);
                     status.setText("Нет соединения или доступа. Проверьте адрес, ресурс, логин и SMB 2 на сервере.");
                 });
             }
@@ -170,13 +212,14 @@ public final class NetworkBrowserActivity extends Activity {
 
     private void openFolder(String url, String label) {
         SmbConnection session = SmbConnection.active();
-        if (session == null) { connectionPanel.setVisibility(View.VISIBLE); return; }
+        if (session == null) { connectionPanel.setVisibility(View.VISIBLE); folderUi.setConnectionVisible(true); return; }
         folderUrl = url;
         query = "";
         title.setText(label);
         entries.clear();
         visible.clear();
         adapter.notifyDataSetChanged();
+        syncItems();
         int request = ++requestId;
         status.setText("Читаю сетевую папку…");
         worker.execute(() -> {
@@ -205,19 +248,20 @@ public final class NetworkBrowserActivity extends Activity {
                 visible.add(entry);
         }
         adapter.notifyDataSetChanged();
+        syncItems();
         status.setText(visible.isEmpty() ? "В этой папке нет видео или подпапок" : "Папок и видео: " + visible.size());
     }
 
+    private void syncItems() {
+        folderUi.getItems().clear();
+        for (SmbConnection.Entry entry : visible)
+            folderUi.getItems().add(new FolderUi.Item(entry.name, entry.directory ? "folder" : "video"));
+    }
+
     private void askSearch() {
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setHint("Название в текущей папке");
-        input.setText(query);
-        new android.app.AlertDialog.Builder(this).setTitle("Поиск в папке")
-            .setView(input).setNegativeButton("Сбросить", (dialog, which) -> { query = ""; applyFilter(); })
-            .setPositiveButton("Найти", (dialog, which) -> {
-                query = input.getText().toString().trim(); applyFilter();
-            }).show();
+        folderUi.getDialogs().showInput("Поиск в папке", "Название в текущей папке",
+            query, "Найти", "Сбросить", value -> { query = value.trim(); applyFilter(); },
+            () -> { query = ""; applyFilter(); });
     }
 
     private void goUp() {

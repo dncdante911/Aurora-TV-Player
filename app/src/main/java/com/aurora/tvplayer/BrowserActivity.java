@@ -1,7 +1,7 @@
 package com.aurora.tvplayer;
 
 import android.Manifest;
-import android.app.Activity;
+import androidx.activity.ComponentActivity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -35,7 +35,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /** Remote-friendly direct browser for Android TV storage volumes. */
-public final class BrowserActivity extends Activity {
+public final class BrowserActivity extends ComponentActivity {
     private final ExecutorService scanner = Executors.newSingleThreadExecutor();
     private final ArrayList<Entry> entries = new ArrayList<>();
     private final ArrayList<Entry> visible = new ArrayList<>();
@@ -49,6 +49,7 @@ public final class BrowserActivity extends Activity {
     private Button volumesButton, filterButton;
     private ListView list;
     private BaseAdapter adapter;
+    private FolderUi folderUi;
 
     private static final class Entry {
         final File file;
@@ -81,14 +82,48 @@ public final class BrowserActivity extends Activity {
         } else if (pendingVolume != null && accessSettingsOpened) {
             accessSettingsOpened = false;
             status.setText("Доступ к USB ещё не включён. В настройках Aurora TV разрешите управление файлами.");
-            new AlertDialog.Builder(this).setTitle("Разрешение не включено")
-                .setMessage("Если телевизор не показал переключатель доступа ко всем файлам, откройте страницу Aurora TV и выберите «Разрешения» или «Специальный доступ».")
-                .setNegativeButton("Позже", null)
-                .setPositiveButton("Страница Aurora TV", (dialog, which) -> openAppDetails()).show();
+            folderUi.getDialogs().showInfoAction("Разрешение не включено",
+                "Если телевизор не показал переключатель доступа ко всем файлам, откройте страницу Aurora TV и выберите «Разрешения» или «Специальный доступ».",
+                "Страница Aurora TV", this::openAppDetails);
         }
     }
 
     private void buildUi() {
+        folderUi = new FolderUi(this, false, new FolderUi.Actions() {
+            @Override public void openDisks() { showVolumes(); }
+            @Override public void goUp() { BrowserActivity.this.goUp(); }
+            @Override public void filter() {
+                showAllFiles = !showAllFiles;
+                filterButton.setText(showAllFiles ? "Только видео" : "Все файлы");
+                applyFilter();
+            }
+            @Override public void search() { askSearch(); }
+            @Override public void refresh() { loadCurrentFolder(); }
+            @Override public void connect() { }
+            @Override public void openConnection() { }
+            @Override public void openItem(int position) {
+                if (position < 0 || position >= visible.size()) return;
+                Entry selected = visible.get(position);
+                if (selected.volume) openVolume(selected.file);
+                else if (selected.directory) openFolder(selected.file);
+                else if (selected.video) play(selected);
+                else Toast.makeText(BrowserActivity.this, "Это не видеофайл", Toast.LENGTH_SHORT).show();
+            }
+        });
+        setContentView(folderUi.getView());
+        title = new TextView(this);
+        status = new TextView(this);
+        volumesButton = new Button(this);
+        filterButton = new Button(this);
+        filterButton.setText("Все файлы");
+        list = new ListView(this);
+        adapter = new FileAdapter();
+        TvUi.bindText(title, folderUi::setTitle);
+        TvUi.bindText(status, folderUi::setStatus);
+        TvUi.bindText(filterButton, folderUi::setFilterTitle);
+    }
+
+    private void legacyBuildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(TvUi.BG);
@@ -223,11 +258,10 @@ public final class BrowserActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 41);
             return;
         }
-        new AlertDialog.Builder(this).setTitle("Доступ к USB и файлам")
-            .setMessage("Для встроенного проводника Android 11 требует разрешение «Доступ ко всем файлам». "
-                + "Разрешите его для Aurora TV в настройках и вернитесь сюда. Плеер не изменяет и не удаляет файлы.")
-            .setNegativeButton("Отмена", null)
-            .setPositiveButton("Открыть настройки", (dialog, which) -> openAccessSettings()).show();
+        folderUi.getDialogs().showInfoAction("Доступ к USB и файлам",
+            "Для встроенного проводника Android 11 требует разрешение «Доступ ко всем файлам». "
+                + "Разрешите его для Aurora TV в настройках и вернитесь сюда. Плеер не изменяет и не удаляет файлы.",
+            "Открыть настройки", this::openAccessSettings);
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grants) {
@@ -279,6 +313,7 @@ public final class BrowserActivity extends Activity {
         entries.clear();
         visible.clear();
         adapter.notifyDataSetChanged();
+        syncItems();
         status.setText("Читаю папку…");
         scanner.execute(() -> {
             File[] files;
@@ -319,8 +354,15 @@ public final class BrowserActivity extends Activity {
                 && entry.name.toLowerCase(Locale.ROOT).contains(needle)) visible.add(entry);
         }
         adapter.notifyDataSetChanged();
+        syncItems();
         if (currentFolder != null) status.setText(visible.isEmpty() ? "В этой папке нет видео или подпапок"
             : "Папок и файлов: " + visible.size());
+    }
+
+    private void syncItems() {
+        folderUi.getItems().clear();
+        for (Entry entry : visible) folderUi.getItems().add(new FolderUi.Item(entry.name,
+            entry.volume ? "volume" : entry.directory ? "folder" : entry.video ? "video" : "other"));
     }
 
     private void goUp() {
@@ -330,14 +372,9 @@ public final class BrowserActivity extends Activity {
     }
 
     private void askSearch() {
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setInputType(InputType.TYPE_CLASS_TEXT);
-        input.setText(query);
-        input.setHint("Название файла или папки");
-        new AlertDialog.Builder(this).setTitle("Поиск в текущей папке")
-            .setView(input).setNegativeButton("Сбросить", (dialog, which) -> { query = ""; applyFilter(); })
-            .setPositiveButton("Найти", (dialog, which) -> { query = input.getText().toString().trim(); applyFilter(); }).show();
+        folderUi.getDialogs().showInput("Поиск в текущей папке", "Название файла или папки",
+            query, "Найти", "Сбросить", value -> { query = value.trim(); applyFilter(); },
+            () -> { query = ""; applyFilter(); });
     }
 
     private void play(Entry selected) {

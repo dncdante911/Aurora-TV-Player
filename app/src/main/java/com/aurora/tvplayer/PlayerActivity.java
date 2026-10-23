@@ -1,6 +1,6 @@
 package com.aurora.tvplayer;
 
-import android.app.Activity;
+import androidx.activity.ComponentActivity;
 import android.app.Dialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -49,7 +49,7 @@ import java.util.List;
 import java.util.Locale;
 
 @OptIn(markerClass = UnstableApi.class)
-public final class PlayerActivity extends Activity {
+public final class PlayerActivity extends ComponentActivity {
     private static final int PICK_SUBTITLE = 31;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable tick = new Runnable() {
@@ -57,7 +57,7 @@ public final class PlayerActivity extends Activity {
     };
     private final Runnable hide = () -> {
         if (this.controls != null && this.player != null && this.player.isPlaying() && this.lastError == null)
-            this.controls.setVisibility(View.GONE);
+            { this.controls.setVisibility(View.GONE); this.playerUi.setVisible(false); }
     };
     private ArrayList<String> uris;
     private ArrayList<String> titles;
@@ -69,6 +69,7 @@ public final class PlayerActivity extends Activity {
     private Button playButton;
     private Button previousButton, nextButton, retryButton;
     private SeekBar seekBar;
+    private PlayerUi playerUi;
     private SharedPreferences resume;
     private String currentUri;
     private PlaybackException lastError;
@@ -83,6 +84,11 @@ public final class PlayerActivity extends Activity {
     private interface ChoiceHandler { void choose(int index); }
 
     private void showChoiceDialog(String heading, List<String> choices, ChoiceHandler handler) {
+        this.handler.removeCallbacks(hide);
+        playerUi.showChoices(heading, choices, handler::choose);
+    }
+
+    private void legacyShowChoiceDialog(String heading, List<String> choices, ChoiceHandler handler) {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         this.handler.removeCallbacks(hide);
@@ -134,6 +140,11 @@ public final class PlayerActivity extends Activity {
     }
 
     private void showInfoDialog(String heading, String message) {
+        handler.removeCallbacks(hide);
+        playerUi.showInfo(heading, message);
+    }
+
+    private void legacyShowInfoDialog(String heading, String message) {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         handler.removeCallbacks(hide);
@@ -257,7 +268,9 @@ public final class PlayerActivity extends Activity {
                 else if (state == Player.STATE_READY) {
                     lastError = null;
                     statusView.setVisibility(View.GONE);
+                    playerUi.setStatus("");
                     retryButton.setVisibility(View.GONE);
+                    playerUi.setError(false);
                 }
                 else if (state == Player.STATE_ENDED) {
                     statusView.setText("Воспроизведение завершено");
@@ -268,6 +281,7 @@ public final class PlayerActivity extends Activity {
             }
             @Override public void onIsPlayingChanged(boolean playing) {
                 playButton.setText(playing ? "❚❚  Пауза" : "▶  Играть");
+                playerUi.setPlaying(playing);
                 if (playing) scheduleHide();
                 else { handler.removeCallbacks(hide); showControls(); }
             }
@@ -277,6 +291,7 @@ public final class PlayerActivity extends Activity {
                 statusView.setText(errorSummary(error));
                 statusView.setVisibility(View.VISIBLE);
                 retryButton.setVisibility(View.VISIBLE);
+                playerUi.setError(true);
                 showControls();
             }
         });
@@ -293,6 +308,49 @@ public final class PlayerActivity extends Activity {
     }
 
     private void buildUi() {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackgroundColor(0xff000000);
+        setContentView(frame);
+        playerView = new PlayerView(this);
+        playerView.setUseController(false);
+        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        frame.addView(playerView, new FrameLayout.LayoutParams(-1, -1));
+        playerUi = new PlayerUi(this, new PlayerUi.Actions() {
+            @Override public void previous() { previousEpisode(); scheduleHide(); }
+            @Override public void rewind() { seekRelative(-10_000); }
+            @Override public void toggle() {
+                if (player == null) return;
+                if (lastError != null) retryPlayback();
+                else if (player.isPlaying()) player.pause(); else player.play();
+                scheduleHide();
+            }
+            @Override public void forward() { seekRelative(30_000); }
+            @Override public void next() { nextEpisode(); scheduleHide(); }
+            @Override public void exit() { finish(); }
+            @Override public void audio() { showTrackMenu(); }
+            @Override public void subtitles() { showSubtitleMenu(); }
+            @Override public void settings() { showMoreMenu(); }
+            @Override public void retry() { retryPlayback(); }
+            @Override public void showError() { showLastError(); }
+            @Override public void menuClosed() { scheduleHide(); }
+        });
+        frame.addView(playerUi.getView(), new FrameLayout.LayoutParams(-1, -1));
+        controls = new LinearLayout(this);
+        titleView = new TextView(this);
+        timeView = new TextView(this);
+        statusView = new TextView(this);
+        playButton = new Button(this);
+        previousButton = new Button(this);
+        nextButton = new Button(this);
+        retryButton = new Button(this);
+        seekBar = new SeekBar(this);
+        seekBar.setMax(1000);
+        TvUi.bindText(titleView, playerUi::setTitle);
+        TvUi.bindText(timeView, playerUi::setTime);
+        TvUi.bindText(statusView, playerUi::setStatus);
+    }
+
+    private void legacyBuildUi() {
         FrameLayout frame = new FrameLayout(this);
         frame.setBackgroundColor(0xff000000);
         setContentView(frame);
@@ -385,6 +443,8 @@ public final class PlayerActivity extends Activity {
         nextButton.setEnabled(player.hasNextMediaItem());
         previousButton.setAlpha(previousButton.isEnabled() ? 1f : 0.45f);
         nextButton.setAlpha(nextButton.isEnabled() ? 1f : 0.45f);
+        playerUi.setPreviousEnabled(previousButton.isEnabled());
+        playerUi.setNextEnabled(nextButton.isEnabled());
     }
 
     private void previousEpisode() {
@@ -406,6 +466,7 @@ public final class PlayerActivity extends Activity {
         lastError = null;
         statusView.setText("Пробую открыть файл снова…");
         retryButton.setVisibility(View.GONE);
+        playerUi.setError(false);
         player.prepare();
         player.play();
     }
@@ -416,6 +477,7 @@ public final class PlayerActivity extends Activity {
         long position = Math.max(0, player.getCurrentPosition());
         if (!seekBar.isPressed()) {
             seekBar.setProgress(duration > 0 ? (int) Math.min(1000, position * 1000 / duration) : 0);
+            playerUi.setProgress(duration > 0 ? Math.min(1f, (float) position / duration) : 0f);
             timeView.setText(formatTime(position) + " / " + (duration > 0 ? formatTime(duration)
                 : player.isCurrentMediaItemLive() ? "LIVE" : "--:--"));
         }
@@ -487,6 +549,7 @@ public final class PlayerActivity extends Activity {
     private void showControls() {
         if (controls == null) return;
         controls.setVisibility(View.VISIBLE);
+        playerUi.setVisible(true);
         scheduleHide();
     }
 
@@ -735,28 +798,19 @@ public final class PlayerActivity extends Activity {
     }
 
     private void showMoreMenu() {
-        String[] options = {"Следующее видео", "Предыдущее видео", "Качество видео / HDR", "Формат изображения", "Скорость воспроизведения", "Повтор" + (player != null && player.getRepeatMode() == Player.REPEAT_MODE_ONE ? "  ✓" : ""), "Подсветка Ambilight", "Информация о декодерах", "Последняя ошибка"};
+        String[] options = {"Качество видео / HDR", "Формат изображения", "Скорость воспроизведения", "Повтор" + (player != null && player.getRepeatMode() == Player.REPEAT_MODE_ONE ? "  ✓" : ""), "Подсветка Ambilight", "Информация о декодерах"};
         showChoiceDialog("Настройки просмотра", java.util.Arrays.asList(options), index -> {
                 if (player == null) return;
                 switch (index) {
-                    case 0: if (player.hasNextMediaItem()) nextEpisode();
-                        else Toast.makeText(this, "Следующего видео в этой папке нет", Toast.LENGTH_SHORT).show();
-                        break;
-                    case 1: if (player.hasPreviousMediaItem()) previousEpisode();
-                        else Toast.makeText(this, "Предыдущего видео в этой папке нет", Toast.LENGTH_SHORT).show();
-                        break;
-                    case 2: showVideoMenu(); break;
-                    case 3: showResizeMenu(); break;
-                    case 4: showSpeedMenu(); break;
-                    case 5:
+                    case 0: showVideoMenu(); break;
+                    case 1: showResizeMenu(); break;
+                    case 2: showSpeedMenu(); break;
+                    case 3:
                         player.setRepeatMode(player.getRepeatMode() == Player.REPEAT_MODE_OFF ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF);
                         Toast.makeText(this, player.getRepeatMode() == Player.REPEAT_MODE_ONE ? "Повтор включён" : "Повтор выключен", Toast.LENGTH_SHORT).show();
                         break;
-                    case 6: showAmbientLightingMenu(); break;
-                    case 7: showDecoderInfo(); break;
-                    case 8: if (lastError != null) showLastError();
-                        else Toast.makeText(this, "Ошибок воспроизведения нет", Toast.LENGTH_SHORT).show();
-                        break;
+                    case 4: showAmbientLightingMenu(); break;
+                    case 5: showDecoderInfo(); break;
                 }
             });
     }

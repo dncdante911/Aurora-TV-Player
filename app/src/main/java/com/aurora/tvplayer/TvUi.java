@@ -9,6 +9,9 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
+import android.text.Editable;
+import android.text.TextWatcher;
+import java.util.function.Consumer;
 
 final class TvUi {
     static final int BG = Color.rgb(8, 14, 23);
@@ -59,6 +62,17 @@ final class TvUi {
 
     static void space(View v, int pixels) {
         v.setMinimumHeight(dp(v.getContext(), pixels));
+    }
+
+    static void bindText(TextView view, Consumer<String> update) {
+        view.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                update.accept(s.toString());
+            }
+            @Override public void afterTextChanged(Editable e) { }
+        });
+        update.accept(view.getText().toString());
     }
 
     private TvUi() {}

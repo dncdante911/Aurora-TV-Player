@@ -1,6 +1,6 @@
 package com.aurora.tvplayer;
 
-import android.app.Activity;
+import androidx.activity.ComponentActivity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -34,7 +34,7 @@ import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends ComponentActivity {
     private static final int PICK_VIDEO = 12;
     private static final int RECOGNIZE_VOICE = 13;
     private final ExecutorService scanner = Executors.newSingleThreadExecutor();
@@ -50,6 +50,7 @@ public final class MainActivity extends Activity {
     private View firstActionButton;
     private SharedPreferences prefs;
     private String loadedFolder;
+    private HomeUi homeUi;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -68,6 +69,10 @@ public final class MainActivity extends Activity {
         super.onResume();
         String savedFolder = prefs.getString("last_folder_path", prefs.getString("folder_path", null));
         if (savedFolder != null && !savedFolder.equals(loadedFolder)) scanSavedFolder();
+        homeUi.setRecentTitle(prefs.getString("recent_uri", null) == null ? null
+            : prefs.getString("recent_title", "видео"));
+        String lastPath = prefs.getString("last_folder_path", null);
+        homeUi.setFolderTitle(lastPath == null ? null : new File(lastPath).getName());
         if (recentButton != null) {
             String recent = prefs.getString("recent_uri", null);
             recentButton.setVisibility(recent == null ? View.GONE : View.VISIBLE);
@@ -84,6 +89,39 @@ public final class MainActivity extends Activity {
     }
 
     private void buildUi() {
+        homeUi = new HomeUi(this, new HomeUi.Actions() {
+            @Override public void openUsb() { startActivity(new Intent(MainActivity.this, BrowserActivity.class)); }
+            @Override public void openNetwork() { startActivity(new Intent(MainActivity.this, NetworkBrowserActivity.class)); }
+            @Override public void openLink() { askUrl(); }
+            @Override public void openVoice() { chooseVoiceLanguage(); }
+            @Override public void openFile() { openFilePicker(); }
+            @Override public void openSoundHelp() { showAudioHelp(); }
+            @Override public void openDevice() { showDeviceReport(); }
+            @Override public void resume() {
+                String uri = prefs.getString("recent_uri", null);
+                if (uri == null) return;
+                if (uri.startsWith("smb://") && !SmbConnection.canOpen(uri)) {
+                    Toast.makeText(MainActivity.this, "Сначала подключитесь к сетевой папке", Toast.LENGTH_LONG).show();
+                    openNetwork();
+                } else launchSingle(Uri.parse(uri), prefs.getString("recent_title", "Видео"));
+            }
+            @Override public void lastFolder() {
+                Intent intent = new Intent(MainActivity.this, BrowserActivity.class);
+                intent.putExtra("initial_folder", prefs.getString("last_folder_path", null));
+                startActivity(intent);
+            }
+            @Override public void playVideo(int index) { launchPlaylist(index); }
+        });
+        setContentView(homeUi.getView());
+        firstActionButton = homeUi.getView();
+        deviceButton = new Button(this);
+        recentButton = new Button(this);
+        lastFolderButton = new Button(this);
+        adapter = new VideoAdapter();
+        showEmpty("Откройте USB или сетевую папку с видео");
+    }
+
+    private void legacyBuildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(TvUi.BG);
@@ -235,6 +273,8 @@ public final class MainActivity extends Activity {
     }
 
     private void showEmpty(String message) {
+        homeUi.setEmptyMessage(message);
+        if (emptyMessage == null) return;
         emptyMessage.setText(message);
         emptyMessage.setVisibility(View.VISIBLE);
     }
@@ -248,6 +288,7 @@ public final class MainActivity extends Activity {
             }
             loadedFolder = path;
             videos.clear();
+            homeUi.getVideos().clear();
             adapter.notifyDataSetChanged();
             showEmpty("Открываю последнюю папку…");
             scanner.execute(() -> {
@@ -264,6 +305,11 @@ public final class MainActivity extends Activity {
     private void showVideos(List<VideoLibrary.Entry> found) {
         videos.clear();
         videos.addAll(found);
+        homeUi.setSectionTitle("ВИДЕО В ПОСЛЕДНЕЙ ПАПКЕ  ·  " + videos.size());
+        homeUi.getVideos().clear();
+        for (VideoLibrary.Entry entry : videos) homeUi.getVideos().add(entry.name);
+        if (videos.isEmpty()) showEmpty("В выбранной папке не нашлось видео.");
+        if (emptyMessage == null) return;
         sectionTitle.setText("ВИДЕО В ПОСЛЕДНЕЙ ПАПКЕ  ·  " + videos.size());
         emptyMessage.setVisibility(videos.isEmpty() ? View.VISIBLE : View.GONE);
         if (videos.isEmpty()) showEmpty("В выбранной папке не нашлось видео.");
@@ -299,20 +345,14 @@ public final class MainActivity extends Activity {
     }
 
     private void askUrl() {
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setHint("https://example.com/video.m3u8");
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        input.setPadding(TvUi.dp(this, 22), TvUi.dp(this, 16), TvUi.dp(this, 22), TvUi.dp(this, 16));
-        new AlertDialog.Builder(this).setTitle("Открыть сетевое видео")
-            .setView(input).setNegativeButton("Отмена", null)
-            .setPositiveButton("Открыть", (dialog, which) -> {
-                String value = input.getText().toString().trim();
+        homeUi.getDialogs().showInput("Открыть сетевое видео", "https://example.com/video.m3u8",
+            "", "Открыть", "Отмена", raw -> {
+                String value = raw.trim();
                 Uri uri = Uri.parse(value);
                 if (("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) && uri.getHost() != null) {
                     launchSingle(uri, VideoLibrary.displayName(this, uri));
                 } else Toast.makeText(this, "Введите ссылку http или https", Toast.LENGTH_LONG).show();
-            }).show();
+            }, null);
     }
 
     private void openFilePicker() {
@@ -329,9 +369,8 @@ public final class MainActivity extends Activity {
     private void chooseVoiceLanguage() {
         String[] labels = {"Русский", "Українська", "English"};
         String[] languages = {"ru-RU", "uk-UA", "en-US"};
-        new AlertDialog.Builder(this).setTitle("Голосовая команда · язык")
-            .setItems(labels, (dialog, index) -> startVoiceRecognition(languages[index]))
-            .setNegativeButton("Отмена", null).show();
+        homeUi.getDialogs().showChoice("Голосовая команда · язык", java.util.Arrays.asList(labels),
+            index -> startVoiceRecognition(languages[index]));
     }
 
     private void startVoiceRecognition(String language) {
@@ -342,11 +381,10 @@ public final class MainActivity extends Activity {
         intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Например: открой сеть или найди фильм");
         try { startActivityForResult(intent, RECOGNIZE_VOICE); }
         catch (ActivityNotFoundException | SecurityException e) {
-            new AlertDialog.Builder(this).setTitle("Распознавание недоступно")
-                .setMessage("На телевизоре нет доступной службы распознавания речи для приложений. "
+            homeUi.getDialogs().showInfo("Распознавание недоступно",
+                "На телевизоре нет доступной службы распознавания речи для приложений. "
                     + "Проверьте установку и настройки голосовых служб Google TV; "
-                    + "управление кнопками пульта остаётся доступным.")
-                .setPositiveButton("Понятно", null).show();
+                    + "управление кнопками пульта остаётся доступным.");
         }
     }
 
@@ -387,19 +425,20 @@ public final class MainActivity extends Activity {
     }
 
     private void showAudioHelp() {
-        new AlertDialog.Builder(this).setTitle("HDR и звук через оптику")
-            .setMessage("HDR10, HDR10+, HLG и Dolby Vision включаются системой автоматически для совместимого файла и экрана. Если Xbox показывает Dolby Vision, телевизор принимает его по HDMI; для DV-файлов в приложении дополнительно нужен подходящий системный декодер и профиль. В меню плеера «Качество видео / HDR» можно выбрать SDR-дорожку, если она есть в потоке. Улучшайзеры изображения ТВ приложение не переключает.\n\nDolby Digital, DTS и Atmos зависят от дорожки и всей аудиоцепочки. Для TCL S643W выберите на саундбаре Optical, а на ТВ — оптический аудиовыход и цифровой формат Auto или Pass-through. Если дорожка молчит, установите PCM в настройках ТВ или выберите другую дорожку в плеере. Приложение не может менять системный режим оптического выхода. Оптика не передаёт Dolby TrueHD/Atmos и многоканальный PCM. Скорость 1× лучше всего сохраняет сквозную передачу звука.")
-            .setPositiveButton("Понятно", null).show();
+        homeUi.getDialogs().showInfo("HDR и звук через оптику",
+            "HDR10, HDR10+, HLG и Dolby Vision включаются системой автоматически для совместимого файла и экрана. Если Xbox показывает Dolby Vision, телевизор принимает его по HDMI; для DV-файлов в приложении дополнительно нужен подходящий системный декодер и профиль. В меню плеера «Качество видео / HDR» можно выбрать SDR-дорожку, если она есть в потоке. Улучшайзеры изображения ТВ приложение не переключает.\n\nDolby Digital, DTS и Atmos зависят от дорожки и всей аудиоцепочки. Для TCL S643W выберите на саундбаре Optical, а на ТВ — оптический аудиовыход и цифровой формат Auto или Pass-through. Если дорожка молчит, установите PCM в настройках ТВ или выберите другую дорожку в плеере. Приложение не может менять системный режим оптического выхода. Оптика не передаёт Dolby TrueHD/Atmos и многоканальный PCM. Скорость 1× лучше всего сохраняет сквозную передачу звука.");
     }
 
     private void checkDevice() {
         if (DeviceProfile.cached(this) != null) return;
         deviceButton.setText("◉  Проверяю возможности телевизора…");
+        homeUi.setDeviceTitle("Проверяю телевизор…");
         scanner.execute(() -> {
             DeviceProfile.refresh(getApplicationContext());
             runOnUiThread(() -> {
                 if (!isFinishing() && deviceButton != null)
                     deviceButton.setText("◉  Мой телевизор · проверка завершена");
+                homeUi.setDeviceTitle("Мой телевизор");
             });
         });
     }
@@ -410,21 +449,20 @@ public final class MainActivity extends Activity {
             Toast.makeText(this, "Проверка ещё выполняется", Toast.LENGTH_SHORT).show();
             return;
         }
-        new AlertDialog.Builder(this).setTitle("Возможности этого ТВ")
-            .setMessage(report)
-            .setNegativeButton("Закрыть", null)
-            .setPositiveButton("Проверить снова", (dialog, which) -> {
+        homeUi.getDialogs().showInfoAction("Возможности этого ТВ", report, "Проверить снова", () -> {
                 deviceButton.setText("◉  Проверяю возможности телевизора…");
+                homeUi.setDeviceTitle("Проверяю телевизор…");
                 scanner.execute(() -> {
                     DeviceProfile.refresh(getApplicationContext());
                     runOnUiThread(() -> {
                         if (!isFinishing() && deviceButton != null) {
                             deviceButton.setText("◉  Мой телевизор · проверка завершена");
+                            homeUi.setDeviceTitle("Мой телевизор");
                             showDeviceReport();
                         }
                     });
                 });
-            }).show();
+            });
     }
 
     private void launchSingle(Uri uri, String title) {
