@@ -29,7 +29,10 @@ data class SettingsState(
     val decoder: DecoderPreference = DecoderPreference.AUTO,
     val frameRate: FrameRateMode = FrameRateMode.SEAMLESS,
     val watchedMinutes: Int = 0,
-    val supportReminderShown: Boolean = false,
+    /** Watched minutes when the support note was last shown; it returns every [Support.REMINDER_AFTER_MINUTES]. */
+    val supportShownAtMinutes: Int = 0,
+    val autoUpdate: Boolean = true,
+    val lastUpdateCheck: Long = 0,
 )
 
 /** App preferences; track choices stay in "library" where the player always kept them. */
@@ -44,7 +47,9 @@ class AppSettings(context: Context) {
             decoder = runCatching { DecoderPreference.valueOf(prefs.getString("decoder", null)!!) }.getOrDefault(DecoderPreference.AUTO),
             frameRate = runCatching { FrameRateMode.valueOf(prefs.getString("frame_rate", null)!!) }.getOrDefault(FrameRateMode.SEAMLESS),
             watchedMinutes = prefs.getInt("watched_minutes", 0),
-            supportReminderShown = prefs.getBoolean("support_reminder_shown", false),
+            supportShownAtMinutes = prefs.getInt("support_shown_at", 0),
+            autoUpdate = prefs.getBoolean("auto_update", true),
+            lastUpdateCheck = prefs.getLong("last_update_check", 0),
         )
     )
     val state: StateFlow<SettingsState> = mutableState.asStateFlow()
@@ -56,7 +61,9 @@ class AppSettings(context: Context) {
     fun setDecoder(value: DecoderPreference) = change { it.copy(decoder = value) }
     fun setFrameRate(value: FrameRateMode) = change { it.copy(frameRate = value) }
     fun addWatchedMinute() = change { it.copy(watchedMinutes = it.watchedMinutes + 1) }
-    fun markSupportReminderShown() = change { it.copy(supportReminderShown = true) }
+    fun markSupportReminderShown() = change { it.copy(supportShownAtMinutes = it.watchedMinutes) }
+    fun setAutoUpdate(enabled: Boolean) = change { it.copy(autoUpdate = enabled) }
+    fun setLastUpdateCheck(time: Long) = change { it.copy(lastUpdateCheck = time) }
 
     private fun change(transform: (SettingsState) -> SettingsState) {
         mutableState.update(transform)
@@ -69,7 +76,9 @@ class AppSettings(context: Context) {
             putString("decoder", s.decoder.name)
             putString("frame_rate", s.frameRate.name)
             putInt("watched_minutes", s.watchedMinutes)
-            putBoolean("support_reminder_shown", s.supportReminderShown)
+            putInt("support_shown_at", s.supportShownAtMinutes)
+            putBoolean("auto_update", s.autoUpdate)
+            putLong("last_update_check", s.lastUpdateCheck)
         }
     }
 }

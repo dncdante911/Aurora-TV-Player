@@ -104,6 +104,9 @@ class MainActivity : ComponentActivity() {
             }
             is UiEvent.RequestStorageAccess -> requestStorageAccess()
             UiEvent.OpenAppSettings -> openAppDetails()
+            UiEvent.AllowInstalls -> runCatching {
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:$packageName".toUri()))
+            }.onFailure { openAppDetails() }
         }
     }
 

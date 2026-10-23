@@ -47,6 +47,7 @@ sealed interface UiEvent {
     data class Voice(val language: String) : UiEvent
     data class RequestStorageAccess(val volume: File) : UiEvent
     data object OpenAppSettings : UiEvent
+    data object AllowInstalls : UiEvent
 }
 
 data class FolderVideo(val uri: String, val title: String)
@@ -76,6 +77,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiEvents = events.receiveAsFlow()
 
     val homeFocus = FocusMemory()
+    private var remindedThisLaunch = false
 
     fun open(screen: Screen) {
         if (screen == current) return
@@ -222,16 +224,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** One gentle thank-you note after ~10 hours of watching; never shown again. */
+    /**
+     * A thank-you note on the home screen after every ~10 hours of watching, at most once per app
+     * launch. The player never shows it: this runs only when the home screen opens.
+     */
     fun maybeRemindSupport() {
+        if (remindedThisLaunch) return
+        remindedThisLaunch = true
         val s = settings.current
-        if (!com.aurora.tvplayer.data.Support.available || s.supportReminderShown || s.watchedMinutes < com.aurora.tvplayer.data.Support.REMINDER_AFTER_MINUTES || dialog != null) return
+        if (!com.aurora.tvplayer.data.Support.available || dialog != null) return
+        if (s.watchedMinutes - s.supportShownAtMinutes < com.aurora.tvplayer.data.Support.REMINDER_AFTER_MINUTES) return
         settings.markSupportReminderShown()
         show(DialogSpec.Message(
             "Нравится Aurora TV?",
-            "Вы посмотрели с плеером уже больше ${s.watchedMinutes / 60} часов. Aurora TV бесплатный и без рекламы — " +
-                "если хотите, можно поддержать автора. Это сообщение больше не появится, а поддержать можно в любой момент в «Мой телевизор».",
+            "С плеером уже ${s.watchedMinutes / 60} ч просмотра — спасибо! Aurora TV бесплатный и без рекламы. " +
+                "Если хотите, можно поддержать автора: QR-код откроется на экране, оплатить можно телефоном.",
             listOf(DialogAction("Поддержать автора", Icons.Favorite) { open(Screen.Support) }),
+        ))
+    }
+
+    val updater = app.updater
+
+    /** "Обновить": confirm with the release notes, ask for the install permission once if needed. */
+    fun installUpdate() {
+        val ready = updater.state.value as? com.aurora.tvplayer.data.UpdateState.Ready ?: return
+        if (!updater.canInstall()) {
+            show(DialogSpec.Message(
+                "Разрешите установку обновлений",
+                "Android один раз попросит разрешить Aurora TV устанавливать приложения. Включите переключатель и вернитесь — обновление продолжится.",
+                listOf(DialogAction("Открыть настройки", Icons.Settings) { send(UiEvent.AllowInstalls) }),
+            ))
+            return
+        }
+        val notes = ready.release.notes.ifBlank { "Новая версия Aurora TV." }.take(1_200)
+        show(DialogSpec.Message(
+            "Обновить до ${ready.release.version}?",
+            "$notes\n\nПлеер закроется на пару секунд. Настройки, история и позиции просмотра сохранятся.",
+            listOf(DialogAction("Установить", Icons.Up) { updater.install() }),
         ))
     }
 

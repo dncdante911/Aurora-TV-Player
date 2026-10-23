@@ -39,6 +39,7 @@ import androidx.tv.material3.Text
 import com.aurora.tvplayer.R
 import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.data.Support
+import com.aurora.tvplayer.data.UpdateState
 import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.Screen
 import com.aurora.tvplayer.ui.UiEvent
@@ -59,12 +60,14 @@ private val RowPadding = PaddingValues(horizontal = 48.dp, vertical = 10.dp)
 fun HomeScreen(vm: MainViewModel) {
     val history by vm.playback.history.collectAsStateWithLifecycle()
     val revision by vm.playback.revision.collectAsStateWithLifecycle()
+    val update by vm.updater.state.collectAsStateWithLifecycle()
     val memory = vm.homeFocus
     val firstSource = remember { FocusRequester() }
     InitialFocus(memory, firstSource)
     LaunchedEffect(Unit) {
         vm.refreshLastFolder()
         vm.maybeRemindSupport()
+        vm.updater.checkIfDue()
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -76,6 +79,10 @@ fun HomeScreen(vm: MainViewModel) {
             contentPadding = PaddingValues(top = 6.dp, bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (update is UpdateState.Available || update is UpdateState.Downloading || update is UpdateState.Ready || update is UpdateState.Installing) item(key = "update") {
+                UpdateBanner(update, onDownload = vm.updater::downloadNow, onInstall = vm::installUpdate,
+                    modifier = Modifier.padding(horizontal = 48.dp).remembered(memory, "update"))
+            }
             item(key = "sources") {
                 Column(Modifier.padding(horizontal = 48.dp)) {
                     Text("Выберите источник", style = MaterialTheme.typography.headlineSmall, color = Aurora.white)

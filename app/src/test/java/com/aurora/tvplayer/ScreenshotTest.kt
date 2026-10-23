@@ -14,6 +14,8 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.padding
 import com.aurora.tvplayer.player.Panel
 import com.aurora.tvplayer.player.PanelOption
 import com.aurora.tvplayer.player.PlayerActions
@@ -137,6 +139,17 @@ class ScreenshotTest {
     @Test
     fun supportReal() = shoot("08-support") {
         AuroraBackground(animated = false) { com.aurora.tvplayer.ui.support.SupportScreen() }
+    }
+
+    @Test
+    fun updateBanner() = shoot("09-update-banner") {
+        AuroraBackground(animated = false) {
+            androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.padding(48.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)) {
+                val release = com.aurora.tvplayer.data.Release("3.2.0", "Новое: подписи серий и быстрый поиск", "", 0, null)
+                com.aurora.tvplayer.ui.home.UpdateBanner(com.aurora.tvplayer.data.UpdateState.Downloading(release, 0.45f), {}, {})
+                com.aurora.tvplayer.ui.home.UpdateBanner(com.aurora.tvplayer.data.UpdateState.Ready(release, java.io.File("x")), {}, {})
+            }
+        }
     }
 
     /** Placeholders only: real details live in data/Support.kt. */

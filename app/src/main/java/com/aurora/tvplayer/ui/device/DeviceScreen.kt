@@ -50,6 +50,7 @@ import com.aurora.tvplayer.data.FrameRateMode
 import com.aurora.tvplayer.data.ReportSection
 import com.aurora.tvplayer.data.ReportTable
 import com.aurora.tvplayer.data.Support
+import com.aurora.tvplayer.data.UpdateState
 import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.Screen
 import com.aurora.tvplayer.ui.components.AuroraRow
@@ -122,6 +123,32 @@ fun DeviceScreen(vm: MainViewModel) {
                 val current = ambient ?: return@Setting
                 if (AmbientLighting.setEnabled(context, !current)) ambient = !current
                 else vm.toast("Телевизор не подтвердил изменение подсветки")
+            }
+        }
+        item { Label("Обновления") }
+        item {
+            val update by vm.updater.state.collectAsStateWithLifecycle()
+            Setting(Icons.Up, "Проверить обновления", when (val u = update) {
+                UpdateState.Checking -> "Проверяю GitHub…"
+                UpdateState.UpToDate -> "У вас последняя версия ${BuildConfig.VERSION_NAME}"
+                is UpdateState.Available -> "Доступна ${u.release.version}"
+                is UpdateState.Downloading -> "Скачиваю ${u.release.version}: ${(u.progress * 100).toInt()}%"
+                is UpdateState.Ready -> "${u.release.version} скачана — нажмите, чтобы установить"
+                is UpdateState.Installing -> "Устанавливаю ${u.release.version}…"
+                is UpdateState.Failed -> u.message
+                UpdateState.Idle -> "Сейчас: ${BuildConfig.VERSION_NAME}. Новые версии берутся из GitHub Releases."
+            }, value = if (update is UpdateState.Ready) "Обновить" else "Проверить", modifier = Modifier.remembered(memory, "update")) {
+                when (update) {
+                    is UpdateState.Ready -> vm.installUpdate()
+                    is UpdateState.Available -> vm.updater.downloadNow()
+                    else -> vm.updater.check(userAsked = true)
+                }
+            }
+        }
+        item {
+            Setting(Icons.Refresh, "Обновлять автоматически", "Раз в 12 часов проверять и скачивать новую версию. Установка — только по кнопке, не во время просмотра.",
+                toggle = settings.autoUpdate, modifier = Modifier.remembered(memory, "autoupdate")) {
+                vm.settings.setAutoUpdate(!settings.autoUpdate)
             }
         }
         item { Label("Оформление и данные") }
