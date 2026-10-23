@@ -146,34 +146,39 @@ fun RoundButton(
 }
 
 /**
- * Source card of the home screen, the most recognizable element of Aurora TV: an icon badge,
- * a title and a hint. [compact] is the smaller tile of the "Ещё" row in the same style.
+ * Source card of the home screen, the most recognizable element of Aurora TV: icon badge on top,
+ * full title and hint below. [compact] is the smaller tile of the "Ещё" row in the same style.
  */
 @Composable
 fun SourceCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
     Surface(
         onClick = onClick,
-        modifier = modifier.height(if (compact) 78.dp else 112.dp),
+        modifier = modifier.height(if (compact) 72.dp else 120.dp),
         shape = ClickableSurfaceDefaults.shape(CardShape),
         colors = auroraColors(container = Aurora.panel.copy(alpha = 0.92f)),
         border = auroraBorder(CardShape, Aurora.line),
         glow = focusGlow,
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
     ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = if (compact) 14.dp else 18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 16.dp),
-        ) {
-            val badge = if (compact) 42.dp else 54.dp
-            Box(
-                Modifier.size(badge).background(LocalContentColor.current.copy(alpha = 0.12f), CircleShape),
-                contentAlignment = Alignment.Center,
+        if (compact) {
+            Row(
+                Modifier.fillMaxSize().padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(icon, null, Modifier.size(badge * 0.5f))
+                Icon(icon, null, Modifier.size(24.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = LocalContentColor.current.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-            Column(Modifier.weight(1f)) {
-                Text(title, style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        } else {
+            Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.Center) {
+                Box(Modifier.size(44.dp).background(LocalContentColor.current.copy(alpha = 0.12f), CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(icon, null, Modifier.size(24.dp))
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = LocalContentColor.current.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }

@@ -31,6 +31,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
@@ -46,6 +47,7 @@ import com.aurora.tvplayer.data.DecoderPreference
 import com.aurora.tvplayer.data.DeviceReport
 import com.aurora.tvplayer.data.FrameRateMode
 import com.aurora.tvplayer.data.ReportSection
+import com.aurora.tvplayer.data.ReportTable
 import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.Screen
 import com.aurora.tvplayer.ui.components.AuroraRow
@@ -182,7 +184,7 @@ fun CapabilitiesScreen(vm: MainViewModel) {
                 }
             }
         } else {
-            items(sections, key = { it.title }) { section ->
+            items(sections, key = { it.title }, span = { if (it.table != null) GridItemSpan(maxLineSpan) else GridItemSpan(1) }) { section ->
                 SectionCard(section, Modifier.remembered(memory, section.title).then(if (section == sections.first()) Modifier.focusRequester(first) else Modifier))
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -217,14 +219,51 @@ private fun SectionCard(section: ReportSection, modifier: Modifier) {
         Column(Modifier.padding(18.dp)) {
             Text(section.title, style = MaterialTheme.typography.titleSmall, color = Aurora.cyan)
             Spacer(Modifier.height(8.dp))
+            section.table?.let { ReportGrid(it) }
             section.rows.forEach { row ->
                 Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(row.label, style = MaterialTheme.typography.bodyMedium, color = Aurora.muted, modifier = Modifier.weight(1f))
-                    row.ok?.let { Icon(if (it) Icons.Check else Icons.Close, null, tint = if (it) Aurora.good else Aurora.faint, modifier = Modifier.padding(end = 6.dp).size(16.dp)) }
-                    Text(row.value, style = MaterialTheme.typography.bodyMedium, color = if (row.ok == false) Aurora.faint else Aurora.white)
+                    // Fixed shares: a long value can no longer squeeze the label into one letter per line.
+                    Text(row.label, style = MaterialTheme.typography.bodyMedium, color = Aurora.muted, modifier = Modifier.weight(0.42f), maxLines = 2)
+                    Row(Modifier.weight(0.58f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                        row.ok?.let { Icon(if (it) Icons.Check else Icons.Close, null, tint = if (it) Aurora.good else Aurora.faint, modifier = Modifier.padding(end = 6.dp).size(16.dp)) }
+                        Text(row.value, style = MaterialTheme.typography.bodyMedium, color = if (row.ok == false) Aurora.faint else Aurora.white, textAlign = TextAlign.End, maxLines = 2)
+                    }
                 }
             }
         }
+    }
+}
+
+/** Resolution × codec table: one column per codec, "60"/"30" in mint, "—" dimmed. */
+@Composable
+private fun ReportGrid(table: ReportTable) {
+    Column {
+        Row(Modifier.padding(bottom = 6.dp)) {
+            Spacer(Modifier.weight(1.1f))
+            table.columns.forEach { name ->
+                Text(name, style = MaterialTheme.typography.labelMedium, color = Aurora.muted, textAlign = TextAlign.Center, modifier = Modifier.weight(1f), maxLines = 1)
+            }
+        }
+        table.rows.forEachIndexed { index, (label, cells) ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(if (index % 2 == 0) Aurora.white.copy(alpha = 0.05f) else Aurora.white.copy(alpha = 0f), RoundedCornerShape(8.dp))
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, style = MaterialTheme.typography.titleSmall, color = Aurora.white, modifier = Modifier.weight(1.1f).padding(start = 10.dp), maxLines = 1)
+                cells.forEach { cell ->
+                    Text(
+                        if (cell == "—") cell else "$cell к/с",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (cell == "—") Aurora.faint else Aurora.mint,
+                        textAlign = TextAlign.Center, modifier = Modifier.weight(1f), maxLines = 1,
+                    )
+                }
+            }
+        }
+        Text("Аппаратный декодер, заявленный прошивкой. «—» — нет аппаратной поддержки (поможет программный FFmpeg, обычно до 1080p).",
+            style = MaterialTheme.typography.bodySmall, color = Aurora.faint, modifier = Modifier.padding(top = 8.dp))
     }
 }
 

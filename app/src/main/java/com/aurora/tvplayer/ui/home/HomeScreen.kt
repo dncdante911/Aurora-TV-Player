@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,7 +33,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -66,20 +64,14 @@ fun HomeScreen(vm: MainViewModel) {
     LaunchedEffect(Unit) { vm.refreshLastFolder() }
 
     Column(Modifier.fillMaxSize()) {
-        // Fixed, outside the scrolling list: focusing the first card can never push it off screen.
-        TopBar()
+        // The banner is the fixed header, as in 2.x: outside the scrolling list, so focusing a card
+        // can never slide it under anything or off the screen.
+        Header()
         LazyColumn(
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(top = 6.dp, bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item(key = "banner") {
-                Image(
-                    painterResource(R.drawable.aurora_tv_banner), "Aurora TV",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.padding(horizontal = 48.dp).fillMaxWidth().height(92.dp).clip(RoundedCornerShape(16.dp)),
-                )
-            }
             item(key = "sources") {
                 Column(Modifier.padding(horizontal = 48.dp)) {
                     Text("Выберите источник", style = MaterialTheme.typography.headlineSmall, color = Aurora.white)
@@ -163,21 +155,17 @@ fun HomeScreen(vm: MainViewModel) {
 }
 
 @Composable
-private fun TopBar() {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 48.dp, end = 48.dp, top = 30.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun Header() {
+    Box(
+        Modifier.padding(start = 48.dp, end = 48.dp, top = 28.dp, bottom = 6.dp)
+            .fillMaxWidth().height(112.dp).clip(RoundedCornerShape(18.dp)),
     ) {
-        Box(Modifier.size(44.dp).background(Aurora.cyan.copy(alpha = 0.12f), CircleShape), contentAlignment = Alignment.Center) {
-            Image(painterResource(R.drawable.aurora_tv_logo), null, Modifier.size(32.dp))
-        }
-        Spacer(Modifier.width(14.dp))
-        Column {
-            Text("AURORA TV", style = MaterialTheme.typography.titleLarge.copy(letterSpacing = 4.sp), color = Aurora.white)
-            Text("ВАШ КИНОЗАЛ", style = MaterialTheme.typography.labelSmall, color = Aurora.mint.copy(alpha = 0.85f))
-        }
-        Spacer(Modifier.weight(1f))
-        Clock()
+        Image(painterResource(R.drawable.aurora_tv_banner), "Aurora TV", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        Box(
+            Modifier.align(Alignment.TopEnd).padding(12.dp)
+                .background(Aurora.navyDeep.copy(alpha = 0.55f), RoundedCornerShape(50))
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+        ) { Clock() }
     }
 }
 
@@ -212,5 +200,5 @@ private fun Clock() {
             delay(60_000 - System.currentTimeMillis() % 60_000)
         }
     }
-    Text(now, style = MaterialTheme.typography.headlineSmall, color = Aurora.white)
+    Text(now, style = MaterialTheme.typography.titleMedium, color = Aurora.white)
 }

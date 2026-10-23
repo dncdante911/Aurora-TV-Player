@@ -15,7 +15,10 @@ import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegLibrary
 import java.util.Locale
 
 data class ReportRow(val label: String, val value: String, val ok: Boolean? = null)
-data class ReportSection(val title: String, val rows: List<ReportRow>)
+/** Grid of cells, e.g. resolutions × codecs; "60", "30" or "—". */
+data class ReportTable(val columns: List<String>, val rows: List<Pair<String, List<String>>>)
+
+data class ReportSection(val title: String, val rows: List<ReportRow>, val table: ReportTable? = null)
 
 /** What the firmware declares about screen, decoders and audio outputs. Declared, not measured. */
 @OptIn(UnstableApi::class)
@@ -24,7 +27,7 @@ object DeviceReport {
         "H.264" to "video/avc", "HEVC" to "video/hevc", "VP9" to "video/x-vnd.on2.vp9",
         "AV1" to "video/av01", "Dolby Vision" to "video/dolby-vision",
     )
-    private val SIZES = listOf("720p" to (1280 to 720), "1080p" to (1920 to 1080), "1440p" to (2560 to 1440), "2160p (4K)" to (3840 to 2160))
+    private val SIZES = listOf("720p" to (1280 to 720), "1080p" to (1920 to 1080), "1440p" to (2560 to 1440), "4K" to (3840 to 2160))
     private val FFMPEG_FORMATS = listOf(
         "DTS / DTS-HD" to "audio/vnd.dts", "Dolby TrueHD" to "audio/true-hd", "AC-3" to "audio/ac3", "E-AC-3" to "audio/eac3",
         "FLAC" to "audio/flac", "Opus" to "audio/opus", "MPEG-2 видео" to "video/mpeg2", "H.264" to "video/avc", "HEVC" to "video/hevc", "VP9" to "video/x-vnd.on2.vp9",
@@ -75,10 +78,16 @@ object DeviceReport {
         })
 
         // As in 2.x: what the hardware decoders declare per resolution, so "will 1440p60 HEVC play?" has an answer.
-        sections += ReportSection("Аппаратное видео по разрешениям", SIZES.map { (label, size) ->
-            val supported = VIDEO.mapNotNull { (name, mime) -> supportedFps(codecs, mime, size.first, size.second).takeIf { it > 0 }?.let { "$name $it" } }
-            ReportRow(label, supported.joinToString(" · ").ifEmpty { "не заявлено" }, supported.isNotEmpty())
-        })
+        sections += ReportSection(
+            "Аппаратное видео: кадров в секунду по разрешениям",
+            emptyList(),
+            ReportTable(
+                columns = VIDEO.map { it.first },
+                rows = SIZES.map { (label, size) ->
+                    label to VIDEO.map { (_, mime) -> supportedFps(codecs, mime, size.first, size.second).takeIf { it > 0 }?.toString() ?: "—" }
+                },
+            ),
+        )
 
         sections += ReportSection("Аудиодекодеры", AUDIO.map { (name, mime) ->
             val ok = hasDecoder(codecs, mime)
