@@ -40,5 +40,6 @@ fun AppRoot(vm: MainViewModel) {
         }
         vm.message?.let { MessageBar(it, Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp)) }
         vm.dialog?.let { DialogHost(it, vm::dismissDialog) }
+        if (vm.voice != com.aurora.tvplayer.VoiceState.Off) VoiceOverlay(vm.voice) { vm.send(UiEvent.CancelVoice) }
     }
 }

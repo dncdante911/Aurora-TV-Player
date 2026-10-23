@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Voice commands through the TV speech recognition service. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Self-update from GitHub Releases; the system still asks the user (or allows it silently on 12+). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.READ_COLOR_ZONES" />
@@ -14,6 +16,10 @@
     <queries>
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+        <!-- Without this Android 11+ hides the recognition service from the app. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
 

@@ -42,6 +42,19 @@ class MainActivity : ComponentActivity() {
     private val voice = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let(vm::handleVoice)
     }
+    private var voiceLanguage = "ru-RU"
+    private val voiceInput by lazy {
+        VoiceInput(
+            context = this,
+            onState = { vm.voice = it },
+            onResult = vm::handleVoice,
+            onUnavailable = { reason -> openRecognitionScreen(voiceLanguage, reason) },
+            onError = vm::toast,
+        )
+    }
+    private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) voiceInput.start(voiceLanguage) else openRecognitionScreen(voiceLanguage, "нет доступа к микрофону")
+    }
     private val readStorage = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) files.retryPendingVolume() else vm.toast("Доступ к файлам не разрешён")
     }
@@ -92,22 +105,44 @@ class MainActivity : ComponentActivity() {
             } catch (e: ActivityNotFoundException) {
                 vm.toast("На ТВ нет системного выбора файлов. Откройте «USB / папки».")
             }
-            is UiEvent.Voice -> try {
-                voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE, event.language)
-                    .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                    .putExtra(RecognizerIntent.EXTRA_PROMPT, "Например: открой сеть, продолжи или найди «Шерлок»"))
-            } catch (e: RuntimeException) {
-                vm.show(DialogSpec.Message("Распознавание недоступно",
-                    "На телевизоре нет службы распознавания речи для приложений. Проверьте голосовые службы Google TV; управление пультом остаётся доступным."))
-            }
+            is UiEvent.Voice -> startVoice(event.language)
+            UiEvent.CancelVoice -> voiceInput.cancel()
             is UiEvent.RequestStorageAccess -> requestStorageAccess()
             UiEvent.OpenAppSettings -> openAppDetails()
             UiEvent.AllowInstalls -> runCatching {
                 startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:$packageName".toUri()))
             }.onFailure { openAppDetails() }
         }
+    }
+
+    private fun startVoice(language: String) {
+        voiceLanguage = language
+        when {
+            !voiceInput.available() -> openRecognitionScreen(language, "служба распознавания не найдена")
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED ->
+                microphone.launch(Manifest.permission.RECORD_AUDIO)
+            else -> voiceInput.start(language)
+        }
+    }
+
+    /** The system recognition screen, as in 2.x; used when the service cannot be reached directly. */
+    private fun openRecognitionScreen(language: String, reason: String) {
+        try {
+            voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+                .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+                .putExtra(RecognizerIntent.EXTRA_PROMPT, "Например: открой сеть, продолжи или найди «Шерлок»"))
+        } catch (e: RuntimeException) {
+            vm.show(DialogSpec.Message("Голосовой ввод недоступен",
+                "Телевизор не дал приложению распознавание речи ($reason). Проверьте, что включены «Google» / «Голосовой поиск» " +
+                    "в настройках ТВ и что приложению Google разрешён микрофон. Управление пультом работает как обычно."))
+        }
+    }
+
+    override fun onStop() {
+        voiceInput.cancel()
+        super.onStop()
     }
 
     private fun requestStorageAccess() {

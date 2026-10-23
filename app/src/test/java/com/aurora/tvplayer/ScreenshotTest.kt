@@ -152,6 +152,14 @@ class ScreenshotTest {
         }
     }
 
+    @Test
+    fun voice() = shoot("10-voice") {
+        AuroraBackground(animated = false) {
+            HomeScreen(vm)
+            com.aurora.tvplayer.ui.VoiceOverlay(VoiceState.Listening("найди Шерлок", 0.6f)) {}
+        }
+    }
+
     /** Placeholders only: real details live in data/Support.kt. */
     @Test
     fun support() = shoot("08-support-example") {

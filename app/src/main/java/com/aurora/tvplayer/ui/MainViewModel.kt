@@ -48,6 +48,7 @@ sealed interface UiEvent {
     data class RequestStorageAccess(val volume: File) : UiEvent
     data object OpenAppSettings : UiEvent
     data object AllowInstalls : UiEvent
+    data object CancelVoice : UiEvent
 }
 
 data class FolderVideo(val uri: String, val title: String)
@@ -64,6 +65,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var message by mutableStateOf<String?>(null)
         private set
+    var voice by mutableStateOf<com.aurora.tvplayer.VoiceState>(com.aurora.tvplayer.VoiceState.Off)
     private var messageJob: Job? = null
 
     /** Videos of the last opened USB folder, shown on the home screen. */
@@ -200,6 +202,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     })
 
     fun handleVoice(spoken: String) {
+        toast("Услышал: «$spoken»")
         val command = spoken.lowercase(Locale.ROOT).trim()
         fun has(vararg words: String) = words.any { command.contains(it) }
         when {
