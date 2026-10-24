@@ -47,6 +47,8 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.aurora.tvplayer.data.ReportSection
+import com.aurora.tvplayer.ui.decor.LocalOccasion
+import com.aurora.tvplayer.ui.decor.cardDecor
 import com.aurora.tvplayer.ui.theme.Aurora
 import com.aurora.tvplayer.ui.theme.Icons
 
@@ -82,7 +84,8 @@ fun VideoCard(
             Box(
                 Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                     .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
-                    .background(Aurora.thumb(title)),
+                    .background(Aurora.thumb(title))
+                    .cardDecor(LocalOccasion.current, title, mirror = true),
             ) {
                 Icon(Icons.Movie, null, tint = Aurora.white.copy(alpha = 0.22f), modifier = Modifier.align(Alignment.Center).size(48.dp))
                 if (watched) Badge("Просмотрено", Modifier.align(Alignment.TopEnd).padding(8.dp), color = Aurora.navy.copy(alpha = 0.7f), content = Aurora.good)
@@ -101,7 +104,7 @@ data class DialogAction(val label: String, val icon: ImageVector? = null, val on
 /** One dialog at a time, rendered by the screen root. */
 sealed interface DialogSpec {
     data class Message(val title: String, val text: String, val actions: List<DialogAction> = emptyList()) : DialogSpec
-    data class Choice(val title: String, val options: List<String>, val selected: Int = -1, val onChoose: (Int) -> Unit) : DialogSpec
+    data class Choice(val title: String, val options: List<String>, val selected: Int = -1, val text: String? = null, val onChoose: (Int) -> Unit) : DialogSpec
     data class Input(val title: String, val hint: String, val initial: String, val confirm: String, val onConfirm: (String) -> Unit) : DialogSpec
     data class Report(val title: String, val sections: List<ReportSection>, val actions: List<DialogAction> = emptyList()) : DialogSpec
 }
@@ -128,6 +131,10 @@ fun DialogHost(spec: DialogSpec, onDismiss: () -> Unit) {
                 }
                 is DialogSpec.Choice -> {
                     DialogTitle(spec.title)
+                    spec.text?.let {
+                        Text(it, style = MaterialTheme.typography.bodyLarge, color = Aurora.muted)
+                        Spacer(Modifier.height(16.dp))
+                    }
                     LazyColumn(Modifier.heightIn(max = 380.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         itemsIndexed(spec.options) { index, option ->
                             AuroraRow(

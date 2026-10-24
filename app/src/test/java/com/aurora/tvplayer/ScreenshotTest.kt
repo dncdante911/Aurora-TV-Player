@@ -66,7 +66,7 @@ class ScreenshotTest {
     @Before
     fun setUp() {
         assumeTrue("Set AURORA_SCREENSHOTS=1 to render screenshots", System.getenv("AURORA_SCREENSHOTS") != null)
-        app.settings.setAnimatedBackground(false)
+        app.settings.setLiveLook(com.aurora.tvplayer.data.LiveLook.OFF)
         val store = app.playback
         store.save(uri(episodes[1]), episodes[1], folder, 42 * 60_000L, 42 * 60_000L)
         store.save(uri(episodes[2]), episodes[2], folder, 44 * 60_000L, 44 * 60_000L)

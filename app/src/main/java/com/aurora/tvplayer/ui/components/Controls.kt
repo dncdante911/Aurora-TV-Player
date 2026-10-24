@@ -62,6 +62,8 @@ import androidx.tv.material3.LocalContentColor
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import com.aurora.tvplayer.ui.decor.LocalOccasion
+import com.aurora.tvplayer.ui.decor.cardDecor
 import com.aurora.tvplayer.ui.theme.Aurora
 
 val ButtonShape = RoundedCornerShape(10.dp)
@@ -160,27 +162,32 @@ fun SourceCard(icon: ImageVector, title: String, subtitle: String, onClick: () -
         glow = focusGlow,
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
     ) {
-        if (compact) {
-            Row(
-                Modifier.fillMaxSize().padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Icon(icon, null, Modifier.size(24.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = LocalContentColor.current.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-        } else {
-            Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.Center) {
-                Box(Modifier.size(44.dp).background(LocalContentColor.current.copy(alpha = 0.12f), CircleShape), contentAlignment = Alignment.Center) {
-                    Icon(icon, null, Modifier.size(24.dp))
-                }
-                Spacer(Modifier.height(10.dp))
-                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.fillMaxSize().cardDecor(LocalOccasion.current, title)) { SourceContent(icon, title, subtitle, compact) }
+    }
+}
+
+@Composable
+private fun SourceContent(icon: ImageVector, title: String, subtitle: String, compact: Boolean) {
+    if (compact) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(icon, null, Modifier.size(24.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = LocalContentColor.current.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+        }
+    } else {
+        Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.Center) {
+            Box(Modifier.size(44.dp).background(LocalContentColor.current.copy(alpha = 0.12f), CircleShape), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(24.dp))
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = LocalContentColor.current.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

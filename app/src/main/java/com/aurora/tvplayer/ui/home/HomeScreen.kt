@@ -47,6 +47,7 @@ import com.aurora.tvplayer.ui.components.InitialFocus
 import com.aurora.tvplayer.ui.components.SourceCard
 import com.aurora.tvplayer.ui.components.VideoCard
 import com.aurora.tvplayer.ui.components.remembered
+import com.aurora.tvplayer.ui.decor.BannerLayout
 import com.aurora.tvplayer.ui.theme.Aurora
 import com.aurora.tvplayer.ui.theme.Icons
 import kotlinx.coroutines.delay
@@ -66,6 +67,7 @@ fun HomeScreen(vm: MainViewModel) {
     InitialFocus(memory, firstSource)
     LaunchedEffect(Unit) {
         vm.refreshLastFolder()
+        vm.maybeAskLiveLook()
         vm.maybeRemindSupport()
         vm.updater.checkIfDue()
     }
@@ -172,8 +174,8 @@ fun HomeScreen(vm: MainViewModel) {
 @Composable
 private fun Header() {
     Box(
-        Modifier.padding(start = 48.dp, end = 48.dp, top = 28.dp, bottom = 6.dp)
-            .fillMaxWidth().height(112.dp).clip(RoundedCornerShape(18.dp)),
+        Modifier.padding(start = BannerLayout.SIDE_DP.dp, end = BannerLayout.SIDE_DP.dp, top = BannerLayout.TOP_DP.dp, bottom = 6.dp)
+            .fillMaxWidth().height(BannerLayout.HEIGHT_DP.dp).clip(RoundedCornerShape(18.dp)),
     ) {
         Image(painterResource(R.drawable.aurora_tv_banner), "Aurora TV", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         Box(

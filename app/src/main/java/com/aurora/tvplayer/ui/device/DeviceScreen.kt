@@ -44,9 +44,13 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.aurora.tvplayer.BuildConfig
 import com.aurora.tvplayer.data.AmbientLighting
+import com.aurora.tvplayer.data.LiveLook
 import com.aurora.tvplayer.data.DecoderPreference
+import com.aurora.tvplayer.data.DecorMode
+import com.aurora.tvplayer.data.DevicePower
 import com.aurora.tvplayer.data.DeviceReport
 import com.aurora.tvplayer.data.FrameRateMode
+import com.aurora.tvplayer.data.Occasion
 import com.aurora.tvplayer.data.ReportSection
 import com.aurora.tvplayer.data.ReportTable
 import com.aurora.tvplayer.data.Support
@@ -70,6 +74,7 @@ fun DeviceScreen(vm: MainViewModel) {
     val context = LocalContext.current
     val settings by vm.settings.state.collectAsStateWithLifecycle()
     var ambient by remember { mutableStateOf(AmbientLighting.isEnabled(context)) }
+    val allowedDecor = DevicePower.liveLookOn(context, settings.liveLook)
     val memory = remember { FocusMemory() }
     val first = remember { FocusRequester() }
     InitialFocus(memory, first)
@@ -153,9 +158,31 @@ fun DeviceScreen(vm: MainViewModel) {
         }
         item { Label("Оформление и данные") }
         item {
-            Setting(Icons.Tv, "Живой фон «Северное сияние»", "Плавные переливы на фоне меню. Выключите на очень слабых приставках.",
-                toggle = settings.animatedBackground, modifier = Modifier.remembered(memory, "background")) {
-                vm.settings.setAnimatedBackground(!settings.animatedBackground)
+            Setting(Icons.Tv, "Живое оформление",
+                when (settings.liveLook) {
+                    LiveLook.AUTO -> if (DevicePower.isWeak(context)) "Авто: приставка слабая, оставлен простой вид — меню не тормозит"
+                        else "Авто: приставка справляется — живой фон «Северное сияние» и сезонное оформление"
+                    LiveLook.ON -> "Живой фон «Северное сияние» и сезонное оформление всегда"
+                    LiveLook.OFF -> "Простой спокойный вид без анимации"
+                },
+                value = settings.liveLook.label, modifier = Modifier.remembered(memory, "background")) {
+                vm.settings.setLiveLook(LiveLook.entries[(settings.liveLook.ordinal + 1) % LiveLook.entries.size])
+            }
+        }
+        item {
+            Setting(Icons.Tv, "Сезонное оформление",
+                if (allowedDecor) "Снег, лепестки, светлячки и листопад по сезону, украшения и салют к праздникам за неделю до и после."
+                else "Работает, когда включено «Живое оформление».",
+                value = settings.decor.label, modifier = Modifier.remembered(memory, "decor")) {
+                vm.settings.setDecor(DecorMode.entries[(settings.decor.ordinal + 1) % DecorMode.entries.size])
+            }
+        }
+        if (allowedDecor) item {
+            val preview = vm.decorPreview
+            Setting(Icons.Tv, "Посмотреть оформление", "Нажимайте, чтобы примерить все сезоны и праздники. После перезапуска — снова по календарю.",
+                value = preview?.label ?: "По календарю", modifier = Modifier.remembered(memory, "decor-preview")) {
+                val all = Occasion.entries
+                vm.decorPreview = if (preview == null) all.first() else all.getOrNull(preview.ordinal + 1)
             }
         }
         item {

@@ -12,8 +12,10 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurora.tvplayer.aurora
+import com.aurora.tvplayer.data.LiveLook
 import com.aurora.tvplayer.data.HistoryEntry
 import com.aurora.tvplayer.data.Media
+import com.aurora.tvplayer.data.Occasion
 import com.aurora.tvplayer.net.SmbConnection
 import com.aurora.tvplayer.player.PlayItem
 import com.aurora.tvplayer.player.PlayRequest
@@ -66,6 +68,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var message by mutableStateOf<String?>(null)
         private set
     var voice by mutableStateOf<com.aurora.tvplayer.VoiceState>(com.aurora.tvplayer.VoiceState.Off)
+
+    /** Settings → "Посмотреть оформление": shows any decoration until the app restarts. */
+    var decorPreview by mutableStateOf<Occasion?>(null)
     private var messageJob: Job? = null
 
     /** Videos of the last opened USB folder, shown on the home screen. */
@@ -231,6 +236,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * A thank-you note on the home screen after every ~10 hours of watching, at most once per app
      * launch. The player never shows it: this runs only when the home screen opens.
      */
+    /** Asked once on the home screen after the update; never during playback. */
+    fun maybeAskLiveLook() {
+        if (settings.current.liveLookAsked || dialog != null) return
+        settings.markLiveLookAsked()
+        val modes = listOf(LiveLook.ON, LiveLook.AUTO, LiveLook.OFF)
+        show(DialogSpec.Choice(
+            title = "Включить живое оформление?",
+            text = "Живой фон «Северное сияние», снег зимой, листопад осенью, украшения и салют к праздникам. " +
+                "Изменить можно в любой момент: «Мой телевизор» → «Живое оформление».",
+            options = listOf("Да, включить", "Авто — плеер сам оценит мощность приставки", "Нет, простой вид без анимации"),
+            selected = 1,
+        ) { index -> settings.setLiveLook(modes[index]) })
+    }
+
     fun maybeRemindSupport() {
         if (remindedThisLaunch) return
         remindedThisLaunch = true

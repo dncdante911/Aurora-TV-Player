@@ -21,8 +21,17 @@ enum class FrameRateMode(val label: String, val detail: String) {
     ALWAYS("Как у видео", "24p/25p/50p без рывков; при старте возможен короткий чёрный экран"),
 }
 
+/** "Живое оформление": the live aurora background and the seasonal decoration together. */
+enum class LiveLook(val label: String) {
+    AUTO("Авто"),
+    ON("Включено"),
+    OFF("Выключено"),
+}
+
 data class SettingsState(
-    val animatedBackground: Boolean = true,
+    val liveLook: LiveLook = LiveLook.AUTO,
+    /** The "Включить живое оформление?" question is asked once. */
+    val liveLookAsked: Boolean = false,
     val autoplayNext: Boolean = true,
     val forwardStepSec: Int = 30,
     val backStepSec: Int = 10,
@@ -33,6 +42,7 @@ data class SettingsState(
     val supportShownAtMinutes: Int = 0,
     val autoUpdate: Boolean = true,
     val lastUpdateCheck: Long = 0,
+    val decor: DecorMode = DecorMode.AUTO,
 )
 
 /** App preferences; track choices stay in "library" where the player always kept them. */
@@ -40,7 +50,10 @@ class AppSettings(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private val mutableState = MutableStateFlow(
         SettingsState(
-            animatedBackground = prefs.getBoolean("animated_background", true),
+            // Who switched the live background off before 3.3 keeps the plain look.
+            liveLook = runCatching { LiveLook.valueOf(prefs.getString("live_look", null)!!) }
+                .getOrDefault(if (prefs.getBoolean("animated_background", true)) LiveLook.AUTO else LiveLook.OFF),
+            liveLookAsked = prefs.getBoolean("live_look_asked", false),
             autoplayNext = prefs.getBoolean("autoplay_next", true),
             forwardStepSec = prefs.getInt("forward_step", 30),
             backStepSec = prefs.getInt("back_step", 10),
@@ -50,12 +63,14 @@ class AppSettings(context: Context) {
             supportShownAtMinutes = prefs.getInt("support_shown_at", 0),
             autoUpdate = prefs.getBoolean("auto_update", true),
             lastUpdateCheck = prefs.getLong("last_update_check", 0),
+            decor = runCatching { DecorMode.valueOf(prefs.getString("decor", null)!!) }.getOrDefault(DecorMode.AUTO),
         )
     )
     val state: StateFlow<SettingsState> = mutableState.asStateFlow()
     val current: SettingsState get() = mutableState.value
 
-    fun setAnimatedBackground(enabled: Boolean) = change { it.copy(animatedBackground = enabled) }
+    fun setLiveLook(mode: LiveLook) = change { it.copy(liveLook = mode, liveLookAsked = true) }
+    fun markLiveLookAsked() = change { it.copy(liveLookAsked = true) }
     fun setAutoplayNext(enabled: Boolean) = change { it.copy(autoplayNext = enabled) }
     fun setForwardStep(seconds: Int) = change { it.copy(forwardStepSec = seconds) }
     fun setDecoder(value: DecoderPreference) = change { it.copy(decoder = value) }
@@ -64,12 +79,14 @@ class AppSettings(context: Context) {
     fun markSupportReminderShown() = change { it.copy(supportShownAtMinutes = it.watchedMinutes) }
     fun setAutoUpdate(enabled: Boolean) = change { it.copy(autoUpdate = enabled) }
     fun setLastUpdateCheck(time: Long) = change { it.copy(lastUpdateCheck = time) }
+    fun setDecor(mode: DecorMode) = change { it.copy(decor = mode) }
 
     private fun change(transform: (SettingsState) -> SettingsState) {
         mutableState.update(transform)
         val s = mutableState.value
         prefs.edit {
-            putBoolean("animated_background", s.animatedBackground)
+            putString("live_look", s.liveLook.name)
+            putBoolean("live_look_asked", s.liveLookAsked)
             putBoolean("autoplay_next", s.autoplayNext)
             putInt("forward_step", s.forwardStepSec)
             putInt("back_step", s.backStepSec)
@@ -79,6 +96,7 @@ class AppSettings(context: Context) {
             putInt("support_shown_at", s.supportShownAtMinutes)
             putBoolean("auto_update", s.autoUpdate)
             putLong("last_update_check", s.lastUpdateCheck)
+            putString("decor", s.decor.name)
         }
     }
 }

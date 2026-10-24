@@ -21,6 +21,9 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Typography
 import androidx.tv.material3.darkColorScheme
+import com.aurora.tvplayer.ui.decor.DecorBackdrop
+import com.aurora.tvplayer.ui.decor.DecorState
+import com.aurora.tvplayer.ui.decor.auroraGlows
 
 /**
  * The Aurora TV look users already know from 2.x: midnight navy, cyan focus fill, mint accents.
@@ -96,9 +99,10 @@ fun AuroraTheme(content: @Composable () -> Unit) {
 /**
  * Navy backdrop with two soft aurora glows. When [animated], the glows drift slowly; the values
  * are read only while drawing, so the screen content is never recomposed by the animation.
+ * With [decor] the glows take the season's colours, and bokeh lights and stars drift behind the menus.
  */
 @Composable
-fun AuroraBackground(animated: Boolean, modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+fun AuroraBackground(animated: Boolean, modifier: Modifier = Modifier, decor: DecorState? = null, content: @Composable BoxScope.() -> Unit) {
     val driftState = if (animated) {
         rememberInfiniteTransition(label = "aurora").animateFloat(
             initialValue = 0f, targetValue = 1f,
@@ -107,6 +111,9 @@ fun AuroraBackground(animated: Boolean, modifier: Modifier = Modifier, content: 
         )
     } else null
     val drift: () -> Float = { driftState?.value ?: 0.35f }
+    // During a season or holiday the two glows take its colours and shine a bit brighter.
+    val (first, second) = decor?.occasion?.let(::auroraGlows) ?: (Aurora.mint to Aurora.violet)
+    val strength = if (decor != null) 1.55f else 1f
     Box(
         modifier
             .fillMaxSize()
@@ -115,10 +122,12 @@ fun AuroraBackground(animated: Boolean, modifier: Modifier = Modifier, content: 
                 val t = drift()
                 val r = size.maxDimension * 0.55f
                 val mint = Offset(size.width * (0.15f + 0.25f * t), size.height * (0.05f + 0.1f * t))
-                drawCircle(Brush.radialGradient(listOf(Aurora.mint.copy(alpha = 0.16f), Color.Transparent), mint, r), r, mint)
+                drawCircle(Brush.radialGradient(listOf(first.copy(alpha = 0.16f * strength), Color.Transparent), mint, r), r, mint)
                 val violet = Offset(size.width * (0.95f - 0.2f * t), size.height * (0.85f - 0.15f * t))
-                drawCircle(Brush.radialGradient(listOf(Aurora.violet.copy(alpha = 0.13f), Color.Transparent), violet, r), r, violet)
+                drawCircle(Brush.radialGradient(listOf(second.copy(alpha = 0.13f * strength), Color.Transparent), violet, r), r, violet)
             },
-        content = content,
-    )
+    ) {
+        decor?.let { DecorBackdrop(it) }
+        content()
+    }
 }
