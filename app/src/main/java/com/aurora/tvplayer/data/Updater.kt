@@ -16,7 +16,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
@@ -106,7 +108,7 @@ class Updater(private val context: Context) {
                         part.outputStream().use { output ->
                             val buffer = ByteArray(64 * 1024)
                             while (true) {
-                                if (!scope.isActive) throw IOException("Отменено")
+                                currentCoroutineContext().ensureActive()
                                 val n = input.read(buffer)
                                 if (n < 0) break
                                 output.write(buffer, 0, n)
@@ -128,6 +130,7 @@ class Updater(private val context: Context) {
             mutableState.value = UpdateState.Ready(release, target)
         } catch (e: Exception) {
             part.delete()
+            if (e is CancellationException) throw e
             Log.w(TAG, "Update download failed", e)
             mutableState.value = UpdateState.Failed("Не удалось скачать обновление: ${e.message ?: "нет сети"}")
         }

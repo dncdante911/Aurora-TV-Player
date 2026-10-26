@@ -44,6 +44,8 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.aurora.tvplayer.BuildConfig
 import com.aurora.tvplayer.data.AmbientLighting
+import com.aurora.tvplayer.data.CrashLog
+import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.data.LiveLook
 import com.aurora.tvplayer.data.DecoderPreference
 import com.aurora.tvplayer.data.DecorMode
@@ -59,6 +61,8 @@ import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.Screen
 import com.aurora.tvplayer.ui.components.AuroraRow
 import com.aurora.tvplayer.ui.components.CardShape
+import com.aurora.tvplayer.ui.components.DialogAction
+import com.aurora.tvplayer.ui.components.DialogSpec
 import com.aurora.tvplayer.ui.components.FocusMemory
 import com.aurora.tvplayer.ui.components.InitialFocus
 import com.aurora.tvplayer.ui.components.ScreenHeader
@@ -114,10 +118,17 @@ fun DeviceScreen(vm: MainViewModel) {
             }
         }
         item {
-            Setting(Icons.Forward, "Перемотка вперёд", "Кнопка и стрелка вправо в плеере. Назад всегда 10 секунд.",
+            Setting(Icons.Forward, "Перемотка вперёд", "Кнопка и стрелка вправо в плеере. Удержание ускоряет, плеер переходит, когда кнопку отпустили.",
                 value = "${settings.forwardStepSec} сек", modifier = Modifier.remembered(memory, "step")) {
                 val steps = listOf(10, 30, 60)
                 vm.settings.setForwardStep(steps[(steps.indexOf(settings.forwardStepSec) + 1) % steps.size])
+            }
+        }
+        item {
+            Setting(Icons.Rewind, "Перемотка назад", "Кнопка и стрелка влево в плеере.",
+                value = "${settings.backStepSec} сек", modifier = Modifier.remembered(memory, "back-step")) {
+                val steps = listOf(5, 10, 15, 30)
+                vm.settings.setBackStep(steps[(steps.indexOf(settings.backStepSec) + 1) % steps.size])
             }
         }
         item {
@@ -186,6 +197,19 @@ fun DeviceScreen(vm: MainViewModel) {
             }
         }
         item {
+            val servers = remember(vm.dialog) { vm.servers.all() }
+            Setting(Icons.Network, "Сетевые папки", if (servers.isEmpty()) "Сохранённых подключений нет."
+                else Media.plural(servers.size, "подключение", "подключения", "подключений") + " · паролей сохранено: ${servers.count { it.hasPassword }}. Нажмите, чтобы забыть все.",
+                modifier = Modifier.remembered(memory, "servers")) {
+                if (servers.isEmpty()) return@Setting
+                vm.show(DialogSpec.Message("Забыть сетевые папки?", "Адреса и сохранённые пароли будут удалены с этого ТВ. Текущее подключение работает до закрытия приложения.",
+                    listOf(DialogAction("Забыть все", Icons.Delete) {
+                        servers.forEach(vm.servers::remove)
+                        vm.toast("Сетевые папки забыты")
+                    })))
+            }
+        }
+        item {
             Setting(Icons.History, "Очистить историю просмотра", "Позиции в файлах сохранятся, исчезнет только ряд «Продолжить».",
                 modifier = Modifier.remembered(memory, "history")) {
                 vm.playback.clearHistory()
@@ -195,6 +219,19 @@ fun DeviceScreen(vm: MainViewModel) {
         if (Support.available) item {
             Setting(Icons.Favorite, "Поддержать автора", "QR-код для благодарности: плеер бесплатный и без рекламы.",
                 value = "Открыть", modifier = Modifier.remembered(memory, "support")) { vm.open(Screen.Support) }
+        }
+        item {
+            val crash = remember(vm.dialog) { CrashLog.read(context) }
+            Setting(Icons.Bug, "Отчёт о сбое", if (crash == null) "Сбоев не было. Если плеер закроется сам, здесь появится текст для автора."
+                else "Плеер закрылся с ошибкой ${crash.lineSequence().firstOrNull().orEmpty()}. Нажмите, чтобы посмотреть.",
+                value = if (crash == null) null else "Открыть", modifier = Modifier.remembered(memory, "crash")) {
+                if (crash == null) return@Setting
+                vm.show(DialogSpec.Message("Отчёт о сбое", crash.take(3_000) + "\n\nСфотографируйте экран и пришлите автору вместе с описанием, что делали.",
+                    listOf(DialogAction("Удалить отчёт", Icons.Delete) {
+                        CrashLog.clear(context)
+                        vm.toast("Отчёт удалён")
+                    })))
+            }
         }
         item {
             Setting(Icons.Volume, "Звук, HDR и Dolby Vision", "Как настроить оптику, Pass-through и HDR.", modifier = Modifier.remembered(memory, "sound")) {

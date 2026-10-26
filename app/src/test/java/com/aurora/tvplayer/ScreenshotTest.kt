@@ -202,6 +202,29 @@ class ScreenshotTest {
     }
 
     @Test
+    fun playerSeekAndSleep() = shoot("11-player-seek") {
+        val state = playerState().apply {
+            controls = false
+            seeking = true
+            position = 16 * 60_000L + 50_000
+            hint = "▶▶ +2:30"
+            sleepLabel = "Сон через 25 минут"
+        }
+        Frame { PlayerOverlay(state, NoActions) }
+    }
+
+    @Test
+    fun playerReconnecting() = shoot("12-player-reconnecting") {
+        val state = playerState().apply {
+            sleepLabel = "Сон после этого файла"
+            reconnecting = "Связь прервалась · переподключаюсь (1 из 3)"
+            nextTitle = "06. Спросите Дживса"
+            position = duration - 12_000
+        }
+        Frame { PlayerOverlay(state, NoActions) }
+    }
+
+    @Test
     fun playerAudio() = shoot("06-player-audio") {
         val state = playerState().apply {
             panel = Panel.Options("Аудиодорожка", listOf(

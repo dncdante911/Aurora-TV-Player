@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
@@ -32,6 +33,7 @@ class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
     private val files: LocalBrowserViewModel by viewModels()
     private var accessSettingsOpened = false
+    private var lastPlayAt = 0L
 
     private val pickFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@registerForActivityResult
@@ -99,7 +101,13 @@ class MainActivity : ComponentActivity() {
 
     private fun handle(event: UiEvent) {
         when (event) {
-            is UiEvent.Play -> startActivity(event.request.toIntent(this))
+            is UiEvent.Play -> {
+                // A double OK on a slow TV would otherwise start the player twice.
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastPlayAt < 1_200) return
+                lastPlayAt = now
+                startActivity(event.request.toIntent(this))
+            }
             UiEvent.PickFile -> try {
                 pickFile.launch(arrayOf("video/*", "application/octet-stream", "application/x-matroska"))
             } catch (e: ActivityNotFoundException) {

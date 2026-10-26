@@ -16,6 +16,7 @@ import com.aurora.tvplayer.data.LiveLook
 import com.aurora.tvplayer.data.HistoryEntry
 import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.data.Occasion
+import com.aurora.tvplayer.data.Subtitles
 import com.aurora.tvplayer.net.SmbConnection
 import com.aurora.tvplayer.player.PlayItem
 import com.aurora.tvplayer.player.PlayRequest
@@ -53,12 +54,13 @@ sealed interface UiEvent {
     data object CancelVoice : UiEvent
 }
 
-data class FolderVideo(val uri: String, val title: String)
+data class FolderVideo(val uri: String, val title: String, val subtitles: List<String> = emptyList())
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application.aurora
     val playback = app.playback
     val settings = app.settings
+    val servers = app.servers
 
     val stack = mutableStateListOf<Screen>(Screen.Home)
     val current: Screen get() = stack.last()
@@ -124,9 +126,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val folder = File(path)
                 val allowed = Build.VERSION.SDK_INT < 30 || runCatching { Environment.isExternalStorageManager(folder) }.getOrDefault(false)
                 if (!allowed) return@withContext null
-                folder.listFiles()?.filter { it.isFile && Media.isVideo(it.name) }
-                    ?.sortedWith { a, b -> Media.naturalOrder.compare(a.name, b.name) }
-                    ?.map { FolderVideo(Uri.fromFile(it).toString(), Media.title(it.name)) }
+                localPlaylist(folder)?.map { FolderVideo(it.uri, it.title, it.subtitles) }
             }
             scannedFolder = path
             folderVideos = found.orEmpty()
@@ -144,21 +144,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playFolderVideo(index: Int) {
-        val items = folderVideos.map { PlayItem(it.uri, it.title) }
-        if (items.isNotEmpty()) send(UiEvent.Play(PlayRequest(items, index, playback.lastFolder)))
+        val items = folderVideos.map { PlayItem(it.uri, it.title, it.subtitles) }
+        if (items.isNotEmpty()) send(UiEvent.Play(PlayRequest.around(items, index, playback.lastFolder)))
     }
 
     /** Continue a history entry with its folder as the playlist, so the next episode follows. */
     fun resume(entry: HistoryEntry) {
-        if (entry.uri.startsWith("smb://") && !SmbConnection.canOpen(entry.uri)) {
-            toast("Сначала подключитесь к сетевой папке")
-            open(Screen.Network)
-            return
-        }
         viewModelScope.launch {
+            if (entry.uri.startsWith("smb://") && !SmbConnection.canOpen(entry.uri)) {
+                // The app was stopped since: come back with the saved login, if the user let us keep it.
+                toast("Подключаюсь к сетевой папке…")
+                val connected = withContext(Dispatchers.IO) { runCatching { SmbConnection.forUrl(entry.uri) }.isSuccess }
+                if (!connected) {
+                    toast("Сначала подключитесь к сетевой папке")
+                    open(Screen.Network)
+                    return@launch
+                }
+            }
             val request = withContext(Dispatchers.IO) { playlistAround(entry) }
             send(UiEvent.Play(request))
         }
+    }
+
+    /** Videos of a local folder in natural order, each with the subtitle files next to it. */
+    private fun localPlaylist(folder: File): List<PlayItem>? {
+        val files = folder.listFiles() ?: return null
+        val subtitles = files.filter { it.isFile && Media.isSubtitle(it.name) }.associate { it.name to Uri.fromFile(it).toString() }
+        return files.filter { it.isFile && Media.isVideo(it.name) }
+            .sortedWith { a, b -> Media.naturalOrder.compare(a.name, b.name) }
+            .map { PlayItem(Uri.fromFile(it).toString(), Media.title(it.name), Subtitles.matching(it.name, subtitles.keys).mapNotNull(subtitles::get)) }
     }
 
     private fun playlistAround(entry: HistoryEntry): PlayRequest {
@@ -167,20 +181,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when {
                 entry.uri.startsWith("file:") -> {
                     val folder = entry.folder?.let(::File) ?: entry.uri.toUri().path?.let { File(it).parentFile } ?: return single
-                    folder.listFiles()?.filter { it.isFile && Media.isVideo(it.name) }
-                        ?.sortedWith { a, b -> Media.naturalOrder.compare(a.name, b.name) }
-                        ?.map { PlayItem(Uri.fromFile(it).toString(), Media.title(it.name)) }
+                    localPlaylist(folder)
                 }
                 entry.uri.startsWith("smb://") -> {
                     val session = SmbConnection.active ?: return single
                     val parent = session.parentOf(entry.uri) ?: session.rootUrl
-                    session.list(parent).filter { it.video }.map { PlayItem(it.url, Media.title(it.name)) }
+                    val listed = session.list(parent)
+                    val subtitles = listed.filter { it.subtitle }.associate { it.name to it.url }
+                    listed.filter { it.video }.map { PlayItem(it.url, Media.title(it.name), Subtitles.matching(it.name, subtitles.keys).mapNotNull(subtitles::get)) }
                 }
                 else -> null
             }
         }.getOrNull().orEmpty()
         val index = items.indexOfFirst { it.uri == entry.uri }
-        return if (index >= 0) PlayRequest(items, index, entry.folder) else single
+        return if (index >= 0) PlayRequest.around(items, index, entry.folder) else single
     }
 
     fun historyActions(entry: HistoryEntry) = show(DialogSpec.Message(

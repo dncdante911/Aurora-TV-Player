@@ -50,6 +50,7 @@ class PlaybackStore(context: Context) {
                 remove(watchedKey(uri))
             }
             if (durationMs > 0) putLong(durationKey(uri), durationMs)
+            putInt(seenKey(uri), today())
         }
         remember(uri, title, folder)
     }
@@ -58,6 +59,7 @@ class PlaybackStore(context: Context) {
         prefs.edit {
             remove(positionKey(uri))
             putBoolean(watchedKey(uri), true)
+            putInt(seenKey(uri), today())
         }
         mutableRevision.value++
     }
@@ -66,11 +68,37 @@ class PlaybackStore(context: Context) {
         prefs.edit {
             remove(positionKey(uri))
             remove(watchedKey(uri))
+            remove(durationKey(uri))
+            remove(seenKey(uri))
         }
         writeHistory(mutableHistory.value.filterNot { it.uri == uri })
     }
 
     fun clearHistory() = writeHistory(emptyList())
+
+    /**
+     * Drops positions of files not played for over a year; without this every file ever opened
+     * stays in the preferences, which Android keeps in memory as a whole. Positions written
+     * before 3.4 carry no date: they get today's and a year of grace. Runs at most once a day.
+     */
+    fun prune() {
+        val day = today()
+        if (prefs.getInt(KEY_PRUNED, 0) == day) return
+        val all = prefs.all
+        val hashes = all.keys.mapNotNullTo(HashSet()) { key ->
+            TRACKED.firstOrNull { key.startsWith(it) }?.let { key.removePrefix(it) }
+        }
+        prefs.edit {
+            hashes.forEach { hash ->
+                val seen = all["seen_$hash"] as? Int
+                when {
+                    seen == null -> putInt("seen_$hash", day)
+                    day - seen > KEEP_DAYS -> (TRACKED + "seen_").forEach { remove(it + hash) }
+                }
+            }
+            putInt(KEY_PRUNED, day)
+        }
+    }
 
     private fun remember(uri: String, title: String, folder: String?) {
         val entry = HistoryEntry(uri, title, folder, System.currentTimeMillis())
@@ -107,6 +135,11 @@ class PlaybackStore(context: Context) {
     private companion object {
         const val KEY_HISTORY = "history_v3"
         const val MAX_HISTORY = 30
+        const val KEY_PRUNED = "pruned_day"
+        const val KEEP_DAYS = 400
+        val TRACKED = listOf("position_", "duration_", "watched_")
+        fun today() = (System.currentTimeMillis() / 86_400_000L).toInt()
+        fun seenKey(uri: String) = "seen_" + uri.hashCode()
         fun positionKey(uri: String) = "position_" + uri.hashCode()
         fun durationKey(uri: String) = "duration_" + uri.hashCode()
         fun watchedKey(uri: String) = "watched_" + uri.hashCode()

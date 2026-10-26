@@ -1,6 +1,7 @@
 package com.aurora.tvplayer.net
 
 import android.net.Uri
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
@@ -34,8 +35,9 @@ class SmbDataSource private constructor() : BaseDataSource(true) {
 
     override fun open(dataSpec: DataSpec): Long {
         transferInitializing(dataSpec)
-        val session = SmbConnection.active ?: throw IOException("Подключение к сетевой папке завершено. Откройте её снова.")
         try {
+            // After Android stopped the app the share comes back from the saved login, if any.
+            val session = SmbConnection.forUrl(dataSpec.uri.toString())
             val smb = session.file(dataSpec.uri.toString())
             file = smb
             val size = smb.length()
@@ -82,13 +84,18 @@ class SmbDataSource private constructor() : BaseDataSource(true) {
     override fun getUri(): Uri? = uri
 
     override fun close() {
+        // A dropped connection makes close() throw too; the player must still be told the transfer ended.
+        val stream = input
+        val smb = file
+        input = null
+        file = null
+        uri = null
         try {
-            input?.close()
+            stream?.close()
+        } catch (e: IOException) {
+            Log.w("AuroraSmb", "Close failed", e)
         } finally {
-            input = null
-            file?.close()
-            file = null
-            uri = null
+            runCatching { smb?.close() }
             if (opened) {
                 opened = false
                 transferEnded()

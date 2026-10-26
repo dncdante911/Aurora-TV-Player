@@ -16,8 +16,8 @@ android {
         minSdk 28
         //noinspection OldTargetApi
         targetSdk 36
-        versionCode 22
-        versionName '3.3.0'
+        versionCode 23
+        versionName '3.4.0'
         // TVs and set-top boxes are ARM; x86 builds would only add ~12 MB of FFmpeg for emulators.
         //noinspection ChromeOsAbiSupport
         ndk { abiFilters 'armeabi-v7a', 'arm64-v8a' }
@@ -73,6 +73,8 @@ dependencies {
     implementation "androidx.media3:media3-ui:$media3"
     implementation "androidx.media3:media3-session:$media3"
     implementation 'eu.agno3.jcifs:jcifs-ng:2.1.10'
+    // jcifs-ng pins BouncyCastle 1.76, which has known CVEs; the API it uses is unchanged in 1.86.
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.86'
     // QR codes on the "Поддержать автора" screen (Apache 2.0); R8 keeps only the encoder.
     implementation 'com.google.zxing:core:3.5.4'
     // FFmpeg audio/video decoders for Media3 (GPL-3.0), built against Media3 $media3, 16 KB aligned.

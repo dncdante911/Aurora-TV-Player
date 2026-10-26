@@ -14,7 +14,9 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 val confirm = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                 else @Suppress("DEPRECATION") intent.getParcelableExtra(Intent.EXTRA_INTENT)
-                confirm?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+                // Without the confirmation screen the update would hang in "Устанавливаю…" forever.
+                val shown = confirm != null && runCatching { context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+                if (!shown) updater.installFinished("Телевизор не показал окно подтверждения установки. Попробуйте ещё раз или установите APK вручную.")
             }
             PackageInstaller.STATUS_SUCCESS -> updater.installFinished(null)
             PackageInstaller.STATUS_FAILURE_ABORTED -> updater.installFinished("Установка отменена")

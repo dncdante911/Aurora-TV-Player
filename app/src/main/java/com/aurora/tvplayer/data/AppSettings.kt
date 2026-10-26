@@ -73,6 +73,7 @@ class AppSettings(context: Context) {
     fun markLiveLookAsked() = change { it.copy(liveLookAsked = true) }
     fun setAutoplayNext(enabled: Boolean) = change { it.copy(autoplayNext = enabled) }
     fun setForwardStep(seconds: Int) = change { it.copy(forwardStepSec = seconds) }
+    fun setBackStep(seconds: Int) = change { it.copy(backStepSec = seconds) }
     fun setDecoder(value: DecoderPreference) = change { it.copy(decoder = value) }
     fun setFrameRate(value: FrameRateMode) = change { it.copy(frameRate = value) }
     fun addWatchedMinute() = change { it.copy(watchedMinutes = it.watchedMinutes + 1) }

@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
@@ -16,7 +18,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurora.tvplayer.aurora
 import com.aurora.tvplayer.data.Media
+import com.aurora.tvplayer.data.Subtitles
 import com.aurora.tvplayer.net.SmbConnection
+import com.aurora.tvplayer.net.SmbServer
 import com.aurora.tvplayer.player.PlayItem
 import com.aurora.tvplayer.player.PlayRequest
 import com.aurora.tvplayer.ui.components.FocusMemory
@@ -210,20 +214,30 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
     fun refresh() { folder?.let(::openFolder) ?: showVolumes() }
 
     private fun playlistFrom(selected: BrowserEntry): PlayRequest {
-        val videos = entries.filter { it.kind == EntryKind.VIDEO }.take(500)
-        val index = videos.indexOf(selected).coerceAtLeast(0)
-        return PlayRequest(videos.map { PlayItem(it.playUri!!, Media.title(it.name)) }, index, folder?.absolutePath)
+        val videos = entries.filter { it.kind == EntryKind.VIDEO }
+        val subtitles = entries.filter { Media.isSubtitle(it.name) }.associate { it.name to Uri.fromFile(File(it.key)).toString() }
+        return PlayRequest.around(
+            videos.map { video -> PlayItem(video.playUri!!, Media.title(video.name), Subtitles.matching(video.name, subtitles.keys).mapNotNull(subtitles::get)) },
+            videos.indexOf(selected).coerceAtLeast(0),
+            folder?.absolutePath,
+        )
     }
 }
 
-/** SMB share browser; the connection lives for the process, the password is never stored. */
+/**
+ * SMB share browser. The connection lives for the process; with «Запомнить пароль» the share
+ * also comes back by itself after Android stopped the app (see [SavedServers]).
+ */
 class NetworkBrowserViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("network", 0)
+    private val servers = application.aurora.servers
 
     var host by mutableStateOf(prefs.getString("host", "").orEmpty())
     var share by mutableStateOf(prefs.getString("share", "").orEmpty())
     var user by mutableStateOf(prefs.getString("user", "").orEmpty())
     var password by mutableStateOf("")
+    var remember by mutableStateOf(prefs.getBoolean("remember_password", true))
+        private set
     var connecting by mutableStateOf(false)
         private set
     var showForm by mutableStateOf(SmbConnection.active == null)
@@ -239,8 +253,25 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
         private set
     var query by mutableStateOf("")
         private set
+    /** Recently used shares, newest first. */
+    var saved by mutableStateOf(servers.all())
+        private set
+    /** Shares of [host], listed when «Подключить» is pressed with an empty folder name. */
+    var shares by mutableStateOf<List<String>>(emptyList())
+        private set
+    /** Computers and NAS that announce SMB on the network (Bonjour/mDNS): name to address. */
+    var discovered by mutableStateOf<List<Pair<String, String>>>(emptyList())
+        private set
+    /** Subtitle files of the open folder, by name. */
+    private var subtitleUrls: Map<String, String> = emptyMap()
     private var job: Job? = null
     val focus = FocusMemory()
+
+    // Declared before init, which starts the discovery.
+    private val nsd = application.getSystemService(NsdManager::class.java)
+    private var discovery: NsdManager.DiscoveryListener? = null
+    private val resolveQueue = ArrayDeque<NsdServiceInfo>()
+    private var resolving = false
 
     val visible: List<BrowserEntry> by derivedStateOf {
         val needle = query.lowercase(Locale.ROOT)
@@ -248,7 +279,65 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
     }
 
     init {
-        SmbConnection.active?.let { openFolder(it.rootUrl) }
+        val active = SmbConnection.active
+        val last = servers.last()
+        when {
+            active != null -> openFolder(active.rootUrl)
+            last != null && last.canReconnect -> useServer(last)
+        }
+        startDiscovery()
+    }
+
+    fun toggleRemember() {
+        remember = !remember
+        prefs.edit { putBoolean("remember_password", remember) }
+    }
+
+    /** A saved share: reconnects silently when it can, otherwise fills the form for the password. */
+    fun useServer(server: SmbServer) {
+        if (connecting) return
+        host = server.host
+        share = server.share
+        user = server.login
+        password = ""
+        shares = emptyList()
+        if (!server.canReconnect) {
+            showForm = true
+            message = "Введите пароль для ${server.label} и нажмите «Подключить»."
+            return
+        }
+        connecting = true
+        message = "Подключаюсь к ${server.label}…"
+        viewModelScope.launch {
+            val connected = withContext(Dispatchers.IO) { SmbConnection.reconnect(server) }
+            connecting = false
+            saved = servers.all()
+            if (connected) {
+                showForm = false
+                SmbConnection.active?.let { openFolder(it.rootUrl) }
+            } else {
+                showForm = true
+                message = "Не удалось подключиться к ${server.label}. Проверьте, что сервер включён, или введите пароль заново."
+            }
+        }
+    }
+
+    fun forgetSaved(server: SmbServer) {
+        servers.remove(server)
+        saved = servers.all()
+    }
+
+    /** A computer found on the network: its address goes into the form, the folders come next. */
+    fun useDiscovered(address: String) {
+        host = address
+        share = ""
+        shares = emptyList()
+        message = "Нажмите «Подключить» — плеер покажет общие папки. Если сервер просит вход, сначала укажите пользователя и пароль."
+    }
+
+    fun chooseShare(name: String) {
+        share = name
+        connect()
     }
 
     fun connect() {
@@ -256,22 +345,48 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
         val login = user.trim()
         val domain = login.substringBefore('\\', "")
         val name = login.substringAfter('\\')
+        val server = host.trim()
+        val folder = share.trim()
+        val secret = password
         connecting = true
+        if (folder.isEmpty()) {
+            message = "Ищу общие папки на $server…"
+            viewModelScope.launch {
+                val result = withContext(Dispatchers.IO) { runCatching { SmbConnection.listShares(server, domain, name, secret) } }
+                connecting = false
+                result.onSuccess { found ->
+                    shares = found
+                    message = if (found.isEmpty()) "Сервер не показал общих папок. Введите имя папки вручную." else "Выберите общую папку:"
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    message = SmbConnection.describe(error)
+                }
+            }
+            return
+        }
         message = "Подключаюсь к общей папке…"
+        val rememberPassword = remember
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { SmbConnection.connect(host.trim(), share.trim(), domain, name, password) }
+                runCatching {
+                    val previous = servers.find(server, folder)
+                    // An empty password field with a saved one: use the saved password.
+                    val pass = if (secret.isEmpty() && previous?.login == login) servers.password(previous) ?: "" else secret
+                    SmbConnection.connect(server, folder, domain, name, pass, preferSmb3 = previous?.smb3 == true).also { session ->
+                        servers.save(server, folder, login, secret, rememberPassword, session.smb3)
+                    }
+                }
             }
             connecting = false
             result.onSuccess { session ->
-                prefs.edit { putString("host", host.trim()).putString("share", share.trim()).putString("user", login) }
                 password = ""
+                shares = emptyList()
                 showForm = false
+                saved = servers.all()
                 openFolder(session.rootUrl)
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                message = (error as? IllegalArgumentException)?.message
-                    ?: "Нет соединения или доступа. Проверьте адрес, имя папки, логин и что на сервере включён SMB 2."
+                message = SmbConnection.describe(error)
             }
         }
     }
@@ -289,6 +404,7 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
             val listed = withContext(Dispatchers.IO) { runCatching { session.list(url) } }
             loading = false
             listed.onSuccess { found ->
+                subtitleUrls = found.filter { it.subtitle }.associate { it.name to it.url }
                 entries = found.filter { it.directory || it.video }.map {
                     BrowserEntry(it.url, it.name, if (it.directory) EntryKind.FOLDER else EntryKind.VIDEO, it.size, if (it.directory) null else it.url)
                 }
@@ -304,8 +420,12 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
             openFolder(entry.key)
             return null
         }
-        val videos = entries.filter { it.kind == EntryKind.VIDEO }.take(500)
-        return PlayRequest(videos.map { PlayItem(it.playUri!!, Media.title(it.name)) }, videos.indexOf(entry).coerceAtLeast(0), folderUrl)
+        val videos = entries.filter { it.kind == EntryKind.VIDEO }
+        return PlayRequest.around(
+            videos.map { video -> PlayItem(video.playUri!!, Media.title(video.name), Subtitles.matching(video.name, subtitleUrls.keys).mapNotNull(subtitleUrls::get)) },
+            videos.indexOf(entry).coerceAtLeast(0),
+            folderUrl,
+        )
     }
 
     fun up(): Boolean {
@@ -319,4 +439,54 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
 
     fun search(text: String) { query = text.trim() }
     fun refresh() { folderUrl?.let(::openFolder) }
+
+    // Discovery: NAS, Samba and macOS announce "_smb._tcp"; Windows usually does not.
+
+    private fun startDiscovery() {
+        val manager = nsd ?: return
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onServiceFound(info: NsdServiceInfo) {
+                viewModelScope.launch { resolveQueue.addLast(info); resolveNext() }
+            }
+            override fun onServiceLost(info: NsdServiceInfo) = Unit
+            override fun onDiscoveryStarted(serviceType: String) = Unit
+            override fun onDiscoveryStopped(serviceType: String) = Unit
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { discovery = null }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
+        }
+        if (runCatching { manager.discoverServices("_smb._tcp", NsdManager.PROTOCOL_DNS_SD, listener) }.isSuccess) discovery = listener
+    }
+
+    /** Android before 14 resolves one service at a time. */
+    @Suppress("DEPRECATION")
+    private fun resolveNext() {
+        val manager = nsd ?: return
+        if (resolving) return
+        val info = resolveQueue.removeFirstOrNull() ?: return
+        resolving = true
+        val listener = object : NsdManager.ResolveListener {
+            override fun onServiceResolved(resolved: NsdServiceInfo) {
+                viewModelScope.launch {
+                    resolving = false
+                    val address = resolved.host?.hostAddress
+                    if (address != null && ':' !in address && discovered.none { it.second == address }) {
+                        discovered = discovered + (resolved.serviceName to address)
+                    }
+                    resolveNext()
+                }
+            }
+            override fun onResolveFailed(failed: NsdServiceInfo, errorCode: Int) {
+                viewModelScope.launch { resolving = false; resolveNext() }
+            }
+        }
+        if (runCatching { manager.resolveService(info, listener) }.isFailure) {
+            resolving = false
+            resolveNext()
+        }
+    }
+
+    override fun onCleared() {
+        discovery?.let { listener -> runCatching { nsd?.stopServiceDiscovery(listener) } }
+        discovery = null
+    }
 }

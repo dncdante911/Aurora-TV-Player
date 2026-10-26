@@ -59,6 +59,7 @@ import androidx.tv.material3.Text
 import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.ui.components.AuroraButton
 import com.aurora.tvplayer.ui.components.AuroraRow
+import com.aurora.tvplayer.ui.components.ProgressBar
 import com.aurora.tvplayer.ui.components.RoundButton
 import com.aurora.tvplayer.ui.components.Spinner
 import com.aurora.tvplayer.ui.theme.Aurora
@@ -95,6 +96,12 @@ class PlayerUiState {
     var hasPrevious by mutableStateOf(false)
     var hasNext by mutableStateOf(false)
     var nextTitle by mutableStateOf<String?>(null)
+    /** ←/→ are moving a seek target that the player has not jumped to yet. */
+    var seeking by mutableStateOf(false)
+    /** Shown instead of the error card while a dropped connection is retried. */
+    var reconnecting by mutableStateOf<String?>(null)
+    var sleepLabel by mutableStateOf<String?>(null)
+    var speed by mutableFloatStateOf(1f)
     /** The error is a decoder failure that FFmpeg may handle. */
     var canSoftware by mutableStateOf(false)
     var forwardStepMs by mutableLongStateOf(30_000L)
@@ -123,7 +130,17 @@ interface PlayerActions {
 @Composable
 fun PlayerOverlay(state: PlayerUiState, actions: PlayerActions) {
     Box(Modifier.fillMaxSize()) {
-        if (state.buffering && state.error == null) Spinner(Modifier.align(Alignment.Center), size = 64.dp)
+        val reconnecting = state.reconnecting
+        if (reconnecting != null && state.error == null) {
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Spinner(size = 64.dp)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    reconnecting, style = MaterialTheme.typography.titleMedium, color = Aurora.white,
+                    modifier = Modifier.background(Aurora.navyDeep.copy(alpha = 0.8f), RoundedCornerShape(50)).padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+            }
+        } else if (state.buffering && state.error == null) Spinner(Modifier.align(Alignment.Center), size = 64.dp)
 
         // The side panel takes the remote alone; the bottom controls come back when it closes.
         AnimatedVisibility(state.controls && state.panel == null && state.error == null && !state.ended, enter = fadeIn(), exit = fadeOut()) {
@@ -133,10 +150,11 @@ fun PlayerOverlay(state: PlayerUiState, actions: PlayerActions) {
         // Quick seek with the controls hidden: a slim timeline and the jump size.
         if (!state.controls && state.hint != null) {
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Aurora.scrimBottom).padding(horizontal = 48.dp, vertical = 28.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.Bottom) {
                     Text(state.hint.orEmpty(), style = MaterialTheme.typography.titleLarge, color = Aurora.cyan)
                     Spacer(Modifier.weight(1f))
-                    Text("${Media.formatTime(state.position)} / ${Media.formatTime(state.duration)}", style = MaterialTheme.typography.titleMedium, color = Aurora.white)
+                    Text(Media.formatTime(state.position), style = MaterialTheme.typography.headlineSmall, color = Aurora.white)
+                    Text(" / ${Media.formatTime(state.duration)}", style = MaterialTheme.typography.titleMedium, color = Aurora.muted)
                 }
                 Spacer(Modifier.height(10.dp))
                 Timeline(state, focused = false)
@@ -151,14 +169,18 @@ fun PlayerOverlay(state: PlayerUiState, actions: PlayerActions) {
         val next = state.nextTitle
         if (next != null && state.error == null && state.panel == null) {
             Column(
-                Modifier.align(Alignment.TopEnd).padding(top = 32.dp, end = 48.dp).widthIn(max = 380.dp)
+                // Below the clock, end time and sleep timer while the top bar is shown.
+                Modifier.align(Alignment.TopEnd).padding(top = if (state.controls) 112.dp else 32.dp, end = 48.dp).widthIn(max = 380.dp)
                     .background(Aurora.navyDeep.copy(alpha = 0.88f), RoundedCornerShape(16.dp))
                     .border(1.dp, Aurora.cyan.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
                     .padding(horizontal = 20.dp, vertical = 14.dp),
             ) {
                 Text("ДАЛЕЕ", style = MaterialTheme.typography.labelSmall, color = Aurora.cyan)
                 Text(next, style = MaterialTheme.typography.titleSmall, color = Aurora.white, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("Запустится автоматически · «Серия ▶▶» — сразу", style = MaterialTheme.typography.bodySmall, color = Aurora.muted)
+                val left = (state.duration - state.position).coerceAtLeast(0)
+                Text("Через ${(left + 999) / 1000} с · «Серия ▶▶» — сразу", style = MaterialTheme.typography.bodySmall, color = Aurora.muted)
+                Spacer(Modifier.height(8.dp))
+                ProgressBar(1f - (left / 20_000f).coerceIn(0f, 1f), Modifier.fillMaxWidth())
             }
         }
 
@@ -192,7 +214,21 @@ private fun Controls(state: PlayerUiState, actions: PlayerActions) {
                 Text(state.title, style = MaterialTheme.typography.headlineSmall, color = Aurora.white, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 state.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = Aurora.muted, maxLines = 1) }
             }
-            Clock()
+            Column(horizontalAlignment = Alignment.End) {
+                Clock()
+                endsAt(state)?.let { Text("закончится в $it", style = MaterialTheme.typography.bodySmall, color = Aurora.muted) }
+                state.sleepLabel?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        Modifier.background(Aurora.violet.copy(alpha = 0.3f), RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Bedtime, null, Modifier.size(16.dp), tint = Aurora.white)
+                        Spacer(Modifier.width(6.dp))
+                        Text(it, style = MaterialTheme.typography.labelMedium, color = Aurora.white)
+                    }
+                }
+            }
         }
 
         Column(
@@ -200,7 +236,7 @@ private fun Controls(state: PlayerUiState, actions: PlayerActions) {
                 .padding(start = 48.dp, end = 48.dp, top = 56.dp, bottom = 26.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(Media.formatTime(state.position), style = MaterialTheme.typography.titleSmall, color = Aurora.white)
+                Text(Media.formatTime(state.position), style = MaterialTheme.typography.titleSmall, color = if (state.seeking) Aurora.cyan else Aurora.white)
                 Spacer(Modifier.width(16.dp))
                 SeekBar(state, actions, Modifier.weight(1f))
                 Spacer(Modifier.width(16.dp))
@@ -361,6 +397,13 @@ private fun SidePanel(panel: Panel, actions: PlayerActions) {
             }
         }
     }
+}
+
+/** "23:41" when a film of known length plays; accounts for the playback speed. */
+private fun endsAt(state: PlayerUiState): String? {
+    if (state.live || state.duration <= 0 || state.speed <= 0f) return null
+    val left = ((state.duration - state.position).coerceAtLeast(0) / state.speed).toLong()
+    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(System.currentTimeMillis() + left))
 }
 
 @Composable

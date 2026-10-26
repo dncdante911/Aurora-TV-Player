@@ -66,6 +66,7 @@
         <activity
             android:name=".PlayerActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|density|uiMode" />
     </application>
 </manifest>

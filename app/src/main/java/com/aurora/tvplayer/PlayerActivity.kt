@@ -1,11 +1,13 @@
 package com.aurora.tvplayer
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -49,17 +51,23 @@ import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.player.Panel
 import com.aurora.tvplayer.player.PanelOption
+import com.aurora.tvplayer.data.Subtitles
+import com.aurora.tvplayer.player.PlayItem
 import com.aurora.tvplayer.player.PlayRequest
+import com.aurora.tvplayer.player.TrackMemory
 import com.aurora.tvplayer.player.PlayerActions
 import com.aurora.tvplayer.player.PlayerOverlay
 import com.aurora.tvplayer.player.PlayerUiState
 import com.aurora.tvplayer.player.RoutingDataSource
 import com.aurora.tvplayer.ui.theme.AuroraTheme
 import com.aurora.tvplayer.ui.theme.Icons
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.Locale
 
 /**
@@ -72,8 +80,10 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     private lateinit var playerView: PlayerView
     private val ui = PlayerUiState()
     private val store by lazy { aurora.playback }
-    /** Track preferences, kept in the 2.x "library" file and keys. */
+    /** Player preferences, kept in the 2.x "library" file and keys. */
     private val trackPrefs by lazy { getSharedPreferences("library", MODE_PRIVATE) }
+    /** Audio and subtitle choice of the playlist's folder. */
+    private lateinit var trackMemory: TrackMemory
 
     private var player: ExoPlayer? = null
     private var session: MediaSession? = null
@@ -88,7 +98,8 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     private var lastSavedAt = 0L
     private var playedMs = 0L
     private var resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-    private var externalSubtitle: MediaItem.SubtitleConfiguration? = null
+    /** A subtitle file picked by hand, for the video with this URI. */
+    private var externalSubtitle: Pair<String, MediaItem.SubtitleConfiguration>? = null
     private var decoders: DecoderManager? = null
     /** Set by "Программный декодер" on the error card; survives onStop/onStart. */
     private var forceSoftwareVideo = false
@@ -96,11 +107,27 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     private var matchedFps = 0f
     private var judderHintShown = false
 
+    /** Seek target while ←/→ are pressed or held; the player seeks once they settle. */
+    private var pendingSeek = C.TIME_UNSET
+    private var seekOrigin = C.TIME_UNSET
+    private var seekJob: Job? = null
+
+    /** Network errors retried silently before the error card shows. */
+    private var autoRetries = 0
+    private var stablePlayMs = 0L
+    private var retryJob: Job? = null
+
+    /** Sleep timer: an elapsedRealtime deadline, or the end of the current file. */
+    private var sleepAt = 0L
+    private var sleepAtEnd = false
+    private var sleepWarned = false
+
     private val pickSubtitle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(::attachSubtitle) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         request = PlayRequest.from(intent) ?: run { finish(); return }
+        trackMemory = TrackMemory(trackPrefs, request.folder)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         startIndex = request.index
         resizeMode = trackPrefs.getInt("resize_mode", AspectRatioFrameLayout.RESIZE_MODE_FIT)
@@ -130,8 +157,35 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         super.onStop()
     }
 
+    /** singleTop: a second "Play" while the player is open replaces the playlist instead of stacking a player. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val next = PlayRequest.from(intent) ?: return
+        setIntent(intent)
+        val started = player != null
+        releasePlayer()
+        request = next
+        trackMemory = TrackMemory(trackPrefs, next.folder)
+        startIndex = next.index
+        startPosition = C.TIME_UNSET
+        externalSubtitle = null
+        forceSoftwareVideo = false
+        forceSoftwareAudio = false
+        autoRetries = 0
+        lastError = null
+        ui.error = null
+        ui.ended = false
+        ui.panel = null
+        if (started) initializePlayer()
+    }
+
     private fun initializePlayer() {
         if (player != null) return
+        // Back after the sleep deadline passed elsewhere: the timer is over, not a reason to pause now.
+        if (sleepAt != 0L && SystemClock.elapsedRealtime() >= sleepAt) {
+            sleepAt = 0L
+            ui.sleepLabel = null
+        }
         val settings = aurora.settings.current
         ui.forwardStepMs = settings.forwardStepSec * 1000L
         ui.backStepMs = settings.backStepSec * 1000L
@@ -153,19 +207,14 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .build()
-        exo.pauseAtEndOfMediaItems = !settings.autoplayNext
+        exo.pauseAtEndOfMediaItems = !settings.autoplayNext || sleepAtEnd
         exo.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { videoDecoder = decoderName }
             override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { audioDecoder = decoderName }
         })
         exo.trackSelectionParameters = savedTrackParameters(exo)
         exo.addListener(listener)
-        val items = request.items.mapIndexed { i, item ->
-            MediaItem.Builder().setUri(item.uri).setMediaId(item.uri)
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(item.title).build())
-                .apply { if (i == startIndex) externalSubtitle?.let { setSubtitleConfigurations(listOf(it)) } }
-                .build()
-        }
+        val items = request.items.map(::mediaItem)
         val saved = store.progress(request.items[startIndex].uri)
         val position = if (startPosition != C.TIME_UNSET) startPosition else if (saved.started) saved.positionMs else 0L
         exo.setMediaItems(items, startIndex, position)
@@ -186,8 +235,30 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         }
     }
 
+    private fun mediaItem(item: PlayItem): MediaItem = MediaItem.Builder().setUri(item.uri).setMediaId(item.uri)
+        .setMediaMetadata(MediaMetadata.Builder().setTitle(item.title).build())
+        .setSubtitleConfigurations(subtitlesOf(item))
+        .build()
+
+    /** Subtitle files next to the video, plus one picked by hand. */
+    private fun subtitlesOf(item: PlayItem): List<MediaItem.SubtitleConfiguration> {
+        val video = Uri.decode(item.uri.substringAfterLast('/'))
+        val sidecars = item.subtitles.map { uri ->
+            val name = Uri.decode(uri.substringAfterLast('/'))
+            MediaItem.SubtitleConfiguration.Builder(uri.toUri())
+                .setId(uri)
+                .setMimeType(Subtitles.mimeType(name))
+                .setLanguage(Subtitles.language(video, name))
+                .setLabel(Subtitles.label(video, name))
+                .build()
+        }
+        return sidecars + listOfNotNull(externalSubtitle?.takeIf { it.first == item.uri }?.second)
+    }
+
     private fun releasePlayer() {
         val exo = player ?: return
+        commitSeek()
+        retryJob?.cancel()
         savePosition()
         startIndex = exo.currentMediaItemIndex.coerceAtLeast(0)
         startPosition = exo.currentPosition
@@ -210,7 +281,7 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
                 request.items.getOrNull((player?.currentMediaItemIndex ?: 0) - 1)?.let { store.markWatched(it.uri) }
             }
             // A saved audio choice is re-matched by language/label in the next file.
-            if (trackPrefs.getBoolean("audio_custom", false)) player?.let {
+            if (trackMemory.load().audioCustom) player?.let {
                 it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
             }
             ui.ended = false
@@ -229,21 +300,51 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
                 Player.STATE_READY -> {
                     lastError = null
                     ui.error = null
+                    ui.reconnecting = null
                 }
                 Player.STATE_ENDED -> {
                     request.items.getOrNull(player?.currentMediaItemIndex ?: -1)?.let { store.markWatched(it.uri) }
                     ui.ended = true
                     ui.controls = false
+                    if (sleepAtEnd) goToSleep()
                 }
             }
         }
 
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            // With the "after this file" sleep timer the player stops at the end of the file instead of moving on.
+            if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM && sleepAtEnd) goToSleep()
+        }
+
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             ui.playing = isPlaying
-            if (isPlaying) scheduleHide() else hideJob?.cancel()
+            if (isPlaying) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                scheduleHide()
+            } else hideJob?.cancel()
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            val exo = player
+            if (exo != null && error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                // A live stream moved on while buffering: jump back to the live edge without a card.
+                exo.seekToDefaultPosition()
+                exo.prepare()
+                return
+            }
+            if (exo != null && error.errorCode in RETRYABLE && autoRetries < MAX_AUTO_RETRIES) {
+                autoRetries++
+                stablePlayMs = 0
+                Log.w("AuroraTV", "Network error, retry $autoRetries: ${error.errorCodeName}", error)
+                ui.reconnecting = "Связь прервалась · переподключаюсь ($autoRetries из $MAX_AUTO_RETRIES)"
+                retryJob?.cancel()
+                retryJob = lifecycleScope.launch {
+                    delay(2_000L * autoRetries)
+                    player?.prepare()
+                }
+                return
+            }
+            ui.reconnecting = null
             lastError = error
             Log.e("AuroraTV", "Playback failed: ${error.errorCodeName}", error)
             ui.error = describe(error)
@@ -254,10 +355,11 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
 
     private fun tick() {
         val exo = player ?: return
-        ui.position = exo.currentPosition.coerceAtLeast(0)
         ui.duration = exo.duration.takeIf { it != C.TIME_UNSET } ?: 0
         ui.buffered = exo.bufferedPosition
         ui.live = exo.isCurrentMediaItemLive
+        if (pendingSeek == C.TIME_UNSET) ui.position = exo.currentPosition.coerceAtLeast(0)
+        ui.speed = exo.playbackParameters.speed
         val remaining = ui.duration - ui.position
         val autoplay = !exo.pauseAtEndOfMediaItems
         ui.nextTitle = if (autoplay && exo.hasNextMediaItem() && ui.duration > 0 && remaining in 1..20_000) request.items.getOrNull(exo.nextMediaItemIndex)?.title else null
@@ -268,7 +370,62 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
                 playedMs = 0
                 aurora.settings.addWatchedMinute()
             }
+            // Playing smoothly again: the next drop gets its full set of silent retries.
+            stablePlayMs += 500
+            if (stablePlayMs >= 30_000) autoRetries = 0
         }
+        tickSleep()
+    }
+
+    // Sleep timer
+
+    private fun tickSleep() {
+        if (sleepAt == 0L) return
+        val left = sleepAt - SystemClock.elapsedRealtime()
+        if (left <= 0) {
+            goToSleep()
+            return
+        }
+        ui.sleepLabel = "Сон через ${Media.plural(((left + 59_999) / 60_000).toInt(), "минуту", "минуты", "минут")}"
+        if (left <= 60_000 && !sleepWarned) {
+            sleepWarned = true
+            hint("Через минуту пауза по таймеру сна · «Настройки» → «Таймер сна», чтобы продлить", 8_000)
+        }
+    }
+
+    private fun setSleep(minutes: Int?, endOfFile: Boolean) {
+        sleepAt = minutes?.let { SystemClock.elapsedRealtime() + it * 60_000L } ?: 0L
+        sleepAtEnd = endOfFile
+        sleepWarned = false
+        player?.pauseAtEndOfMediaItems = !aurora.settings.current.autoplayNext || endOfFile
+        ui.sleepLabel = when {
+            endOfFile -> "Сон после этого файла"
+            minutes != null -> "Сон через ${Media.plural(minutes, "минуту", "минуты", "минут")}"
+            else -> null
+        }
+        hint(ui.sleepLabel ?: "Таймер сна выключен")
+    }
+
+    /** Pauses, saves the place and lets the TV fall asleep on its own (screensaver, auto power-off). */
+    private fun goToSleep() {
+        setSleep(null, endOfFile = false)
+        player?.pause()
+        savePosition()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        hint("Таймер сна: пауза. Место сохранено — спокойной ночи!", 10_000)
+    }
+
+    private fun sleepMenu() {
+        val off = sleepAt == 0L && !sleepAtEnd
+        openPanel(Panel.Options("Таймер сна", listOf(
+            PanelOption("Выключен", selected = off) { setSleep(null, false); closePanel() },
+            PanelOption("После этого файла", "Пауза в конце серии, следующая не начнётся", selected = sleepAtEnd) { setSleep(null, true); closePanel() },
+        ) + listOf(15, 30, 45, 60, 90, 120).map { minutes ->
+            PanelOption(Media.plural(minutes, "минута", "минуты", "минут"), if (minutes >= 60) "${minutes / 60} ч" + (if (minutes % 60 > 0) " ${minutes % 60} мин" else "") else null) {
+                setSleep(minutes, false)
+                closePanel()
+            }
+        }))
     }
 
     private fun savePosition() {
@@ -328,20 +485,57 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
 
     override fun togglePlay() {
         val exo = player ?: return
+        commitSeek()
         if (lastError != null) retry() else if (exo.isPlaying) exo.pause() else exo.play()
     }
 
+    /**
+     * Moves the target, not the player: holding ← or → would otherwise seek 20 times a second,
+     * and every seek over SMB reopens the file. The player seeks once the key settles.
+     */
     override fun seekBy(deltaMs: Long) {
         val exo = player ?: return
-        var target = (exo.currentPosition + deltaMs).coerceAtLeast(0)
-        if (exo.duration > 0) target = target.coerceAtMost(exo.duration - 1_000)
-        exo.seekTo(target)
+        if (!exo.isCurrentMediaItemSeekable && exo.isCurrentMediaItemLive) return
+        val now = exo.currentPosition.coerceAtLeast(0)
+        if (seekOrigin == C.TIME_UNSET) seekOrigin = now
+        var target = ((if (pendingSeek != C.TIME_UNSET) pendingSeek else now) + deltaMs).coerceAtLeast(0)
+        if (exo.duration > 0) target = target.coerceAtMost((exo.duration - 1_000).coerceAtLeast(0))
+        pendingSeek = target
         ui.position = target
-        hint((if (deltaMs < 0) "◀◀ " else "▶▶ ") + "${kotlin.math.abs(deltaMs) / 1000} с")
+        ui.seeking = true
+        val shift = target - seekOrigin
+        hint((if (shift < 0) "◀◀ −" else "▶▶ +") + shiftLabel(kotlin.math.abs(shift)), 2_500)
+        seekJob?.cancel()
+        seekJob = lifecycleScope.launch {
+            delay(SEEK_SETTLE_MS)
+            seekJob = null
+            commitSeek()
+        }
+    }
+
+    private fun commitSeek() {
+        seekJob?.cancel()
+        seekJob = null
+        val target = pendingSeek
+        pendingSeek = C.TIME_UNSET
+        seekOrigin = C.TIME_UNSET
+        ui.seeking = false
+        if (target != C.TIME_UNSET) player?.seekTo(target)
+    }
+
+    /** 30000 -> "30 с", 150000 -> "2:30", 4500000 -> "1:15:00". */
+    private fun shiftLabel(ms: Long): String {
+        val seconds = ms / 1000
+        return when {
+            seconds < 60 -> "$seconds с"
+            seconds < 3600 -> String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60)
+            else -> Media.formatTime(ms)
+        }
     }
 
     override fun previous() {
         val exo = player ?: return
+        commitSeek()
         if (exo.hasPreviousMediaItem()) {
             exo.seekToPreviousMediaItem()
             exo.play()
@@ -350,6 +544,7 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
 
     override fun next() {
         val exo = player ?: return
+        commitSeek()
         if (exo.hasNextMediaItem()) {
             ui.error = null
             lastError = null
@@ -363,6 +558,8 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
 
     override fun retry() {
         val exo = player ?: return
+        retryJob?.cancel()
+        autoRetries = 0
         lastError = null
         ui.error = null
         exo.prepare()
@@ -483,11 +680,11 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     override fun audio() {
         val exo = player ?: return
         val options = mutableListOf<PanelOption>()
-        val custom = trackPrefs.getBoolean("audio_custom", false)
+        val custom = trackMemory.load().audioCustom
         options += PanelOption("Автоматически", "Вывод по настройкам ТВ", selected = !custom) {
             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO)
                 .setPreferredAudioLanguage(null).setPreferredAudioLabels().build()
-            trackPrefs.edit { putBoolean("audio_custom", false); remove("audio_language"); remove("audio_label"); remove("audio_mime"); remove("audio_channels"); remove("audio_index") }
+            trackMemory.update { it.copy(audioCustom = false, audioLanguage = null, audioLabel = null, audioMime = null, audioChannels = -1, audioIndex = -1) }
             closePanel()
         }
         var ordinal = 0
@@ -511,13 +708,9 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
                         .setPreferredAudioLanguage(usable(format.language))
                         .apply { usable(format.label)?.let { setPreferredAudioLabels(it) } ?: setPreferredAudioLabels() }
                         .build()
-                    trackPrefs.edit {
-                        putBoolean("audio_custom", true)
-                        putString("audio_language", usable(format.language))
-                        putString("audio_label", usable(format.label))
-                        putString("audio_mime", format.sampleMimeType)
-                        putInt("audio_channels", format.channelCount)
-                        putInt("audio_index", index)
+                    trackMemory.update {
+                        it.copy(audioCustom = true, audioLanguage = usable(format.language), audioLabel = usable(format.label),
+                            audioMime = format.sampleMimeType, audioChannels = format.channelCount, audioIndex = index)
                     }
                     closePanel()
                 }
@@ -529,12 +722,13 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     /** Re-applies the remembered audio track by label, language, codec and position. */
     private fun applySavedAudioTrack(tracks: Tracks) {
         val exo = player ?: return
-        if (!trackPrefs.getBoolean("audio_custom", false)) return
-        val language = trackPrefs.getString("audio_language", null)
-        val label = trackPrefs.getString("audio_label", null)
-        val mime = trackPrefs.getString("audio_mime", null)
-        val channels = trackPrefs.getInt("audio_channels", -1)
-        val savedIndex = trackPrefs.getInt("audio_index", -1)
+        val saved = trackMemory.load()
+        if (!saved.audioCustom) return
+        val language = saved.audioLanguage
+        val label = saved.audioLabel
+        val mime = saved.audioMime
+        val channels = saved.audioChannels
+        val savedIndex = saved.audioIndex
         var ordinal = 0
         var bestScore = -1
         var best: TrackSelectionOverride? = null
@@ -564,13 +758,14 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     }
 
     private fun savedTrackParameters(exo: ExoPlayer) = exo.trackSelectionParameters.buildUpon().apply {
-        val subtitles = trackPrefs.getBoolean("subtitles_enabled", true)
+        val saved = trackMemory.load()
+        val subtitles = saved.subtitlesEnabled
         setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitles)
         setSelectTextByDefault(subtitles)
         setSelectUndeterminedTextLanguage(subtitles)
-        trackPrefs.getString("subtitle_language", null)?.let { setPreferredTextLanguage(it) }
-        trackPrefs.getString("audio_language", null)?.let { setPreferredAudioLanguage(it) }
-        trackPrefs.getString("audio_label", null)?.let { setPreferredAudioLabels(it) }
+        saved.subtitleLanguage?.let { setPreferredTextLanguage(it) }
+        saved.audioLanguage?.let { setPreferredAudioLanguage(it) }
+        saved.audioLabel?.let { setPreferredAudioLabels(it) }
     }.build()
 
     override fun subtitles() {
@@ -581,27 +776,27 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         options += PanelOption("Выключить", selected = !enabled) {
             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_TEXT)
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
-            trackPrefs.edit { putBoolean("subtitles_enabled", false); remove("subtitle_language") }
+            trackMemory.update { it.copy(subtitlesEnabled = false, subtitleLanguage = null) }
             closePanel()
         }
         options += PanelOption("Автоматически", "Встроенные субтитры по умолчанию", selected = enabled && !anySelected) {
             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_TEXT)
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).setSelectTextByDefault(true).setSelectUndeterminedTextLanguage(true)
                 .setPreferredTextLanguages().build()
-            trackPrefs.edit { putBoolean("subtitles_enabled", true); remove("subtitle_language") }
+            trackMemory.update { it.copy(subtitlesEnabled = true, subtitleLanguage = null) }
             closePanel()
         }
         groups(C.TRACK_TYPE_TEXT).forEach { group ->
             for (i in 0 until group.length) {
                 if (!group.isTrackSupported(i)) continue
                 val format = group.getTrackFormat(i)
-                options += PanelOption(languageName(format.language), usable(format.label) ?: format.sampleMimeType?.substringAfter('/'), selected = enabled && group.isTrackSelected(i)) {
+                options += PanelOption(languageName(format.language), usable(format.label) ?: format.sampleMimeType?.substringAfterLast('/')?.removePrefix("x-"), selected = enabled && group.isTrackSelected(i)) {
                     exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_TEXT)
                         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                         .addOverride(TrackSelectionOverride(group.mediaTrackGroup, i))
                         .apply { format.language?.let { setPreferredTextLanguage(it) } }
                         .build()
-                    trackPrefs.edit { putBoolean("subtitles_enabled", true); putString("subtitle_language", format.language) }
+                    trackMemory.update { it.copy(subtitlesEnabled = true, subtitleLanguage = format.language) }
                     closePanel()
                 }
             }
@@ -614,27 +809,42 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         openPanel(Panel.Options("Субтитры", options))
     }
 
+    /**
+     * A picked subtitle is copied into the cache first: document providers may hide the file name
+     * and revoke access later, and the copy is converted to UTF-8 on the way.
+     */
     private fun attachSubtitle(uri: Uri) {
-        runCatching { contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        val name = Media.displayName(this, uri).lowercase(Locale.ROOT)
-        val mime = when {
-            name.endsWith(".vtt") -> MimeTypes.TEXT_VTT
-            name.endsWith(".ass") || name.endsWith(".ssa") -> MimeTypes.TEXT_SSA
-            else -> MimeTypes.APPLICATION_SUBRIP
+        val target = request.items.getOrNull(player?.currentMediaItemIndex ?: startIndex) ?: return
+        lifecycleScope.launch {
+            val copy = withContext(Dispatchers.IO) {
+                runCatching {
+                    val name = Media.displayName(this@PlayerActivity, uri)
+                    val extension = name.substringAfterLast('.', "srt").lowercase(Locale.ROOT).takeIf { Media.isSubtitle("x.$it") } ?: "srt"
+                    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("empty")
+                    if (bytes.size > Subtitles.MAX_BYTES) error("too large")
+                    File(cacheDir, "subtitles").apply { mkdirs() }.listFiles()?.forEach { it.delete() }
+                    File(cacheDir, "subtitles/${name.substringBeforeLast('.').take(60).replace(Regex("[^\\p{L}\\p{N}._ -]"), "_")}.$extension")
+                        .apply { writeBytes(Subtitles.toUtf8(bytes)) }
+                }.onFailure { Log.w("AuroraTV", "Subtitle copy failed", it) }.getOrNull()
+            }
+            if (copy == null) {
+                hint("Не удалось прочитать файл субтитров")
+                return@launch
+            }
+            val subtitle = MediaItem.SubtitleConfiguration.Builder(Uri.fromFile(copy)).setId("picked:" + copy.name)
+                .setMimeType(Subtitles.mimeType(copy.name)).setLabel(copy.nameWithoutExtension).setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
+            externalSubtitle = target.uri to subtitle
+            trackMemory.update { it.copy(subtitlesEnabled = true) }
+            val exo = player ?: return@launch // applied in initializePlayer when the picker paused the player
+            val index = request.items.indexOf(target).takeIf { it == exo.currentMediaItemIndex } ?: return@launch
+            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).setSelectTextByDefault(true).build()
+            val position = exo.currentPosition
+            exo.replaceMediaItem(index, mediaItem(target))
+            exo.seekTo(index, position)
+            exo.prepare()
+            exo.play()
+            hint("Субтитры добавлены")
         }
-        val subtitle = MediaItem.SubtitleConfiguration.Builder(uri).setMimeType(mime).setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
-        externalSubtitle = subtitle
-        trackPrefs.edit { putBoolean("subtitles_enabled", true) }
-        val exo = player ?: return // applied in initializePlayer when the picker paused the player
-        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).setSelectTextByDefault(true).build()
-        val index = exo.currentMediaItemIndex
-        val position = exo.currentPosition
-        val current = exo.currentMediaItem ?: return
-        exo.replaceMediaItem(index, current.buildUpon().setSubtitleConfigurations(listOf(subtitle)).build())
-        exo.seekTo(index, position)
-        exo.prepare()
-        exo.play()
-        hint("Субтитры добавлены")
     }
 
     override fun settings() {
@@ -643,6 +853,7 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
         openPanel(Panel.Options("Настройки просмотра", listOf(
             PanelOption("Качество видео / HDR", "Выбор дорожки, если поток их предлагает", icon = Icons.Hdr) { videoMenu() },
             PanelOption("Формат изображения", resizeLabels[resizeModes.indexOf(resizeMode).coerceAtLeast(0)], icon = Icons.AspectRatio) { resizeMenu() },
+            PanelOption("Таймер сна", ui.sleepLabel ?: "Выключен", icon = Icons.Bedtime) { sleepMenu() },
             PanelOption("Скорость", speedLabel(speed), icon = Icons.Speed) { speedMenu() },
             PanelOption("Повтор файла", if (exo.repeatMode == Player.REPEAT_MODE_ONE) "Включён" else "Выключен", icon = Icons.Repeat) {
                 exo.repeatMode = if (exo.repeatMode == Player.REPEAT_MODE_ONE) Player.REPEAT_MODE_OFF else Player.REPEAT_MODE_ONE
@@ -828,6 +1039,15 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
 
     private companion object {
         val RUSSIAN: Locale = Locale.forLanguageTag("ru")
+        /** Longer than the remote's key repeat (about 50 ms), short enough to feel immediate. */
+        const val SEEK_SETTLE_MS = 450L
+        const val MAX_AUTO_RETRIES = 3
+        /** Read errors worth a silent retry: the network or the NAS hiccuped, the file is fine. */
+        val RETRYABLE = setOf(
+            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        )
     }
 
     @SuppressLint("RestrictedApi") // ComponentActivity marks the override restricted; overriding it is how keys are seen first.

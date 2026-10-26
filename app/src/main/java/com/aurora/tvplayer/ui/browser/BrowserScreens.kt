@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +35,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.data.PlaybackStore
+import com.aurora.tvplayer.net.SmbConnection
 import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.UiEvent
 import com.aurora.tvplayer.ui.components.AuroraButton
@@ -115,19 +118,43 @@ fun NetworkScreen(vm: MainViewModel) {
         form = if (browser.showForm) {
             {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (browser.saved.isNotEmpty()) ChipLine("Сохранённые") {
+                        items(browser.saved, key = { "saved:" + it.key }) { server ->
+                            AuroraChip(server.label, onClick = { browser.useServer(server) }, icon = if (server.hasPassword) Icons.Key else Icons.Network,
+                                selected = SmbConnection.active?.let { it.host.equals(server.host, true) && it.share.equals(server.share, true) } == true,
+                                modifier = Modifier.remembered(browser.focus, "saved:" + server.key))
+                        }
+                    }
+                    if (browser.discovered.isNotEmpty()) ChipLine("Найдены в сети") {
+                        items(browser.discovered, key = { "found:" + it.second }) { (name, address) ->
+                            AuroraChip("$name · $address", onClick = { browser.useDiscovered(address) }, icon = Icons.Tv,
+                                selected = browser.host == address, modifier = Modifier.remembered(browser.focus, "found:$address"))
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         AuroraTextField(browser.host, { browser.host = it }, "Адрес ПК / NAS (192.168.1.20)", Modifier.weight(1.4f).remembered(browser.focus, "form:host"),
                             icon = Icons.Network, keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next)
-                        AuroraTextField(browser.share, { browser.share = it }, "Общая папка", Modifier.weight(1f).remembered(browser.focus, "form:share"), icon = Icons.Folder, imeAction = ImeAction.Next)
+                        AuroraTextField(browser.share, { browser.share = it }, "Общая папка (или пусто)", Modifier.weight(1f).remembered(browser.focus, "form:share"), icon = Icons.Folder, imeAction = ImeAction.Next)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         AuroraTextField(browser.user, { browser.user = it }, "Пользователь (пусто — гость)", Modifier.weight(1f).remembered(browser.focus, "form:user"), imeAction = ImeAction.Next)
                         AuroraTextField(browser.password, { browser.password = it }, "Пароль", Modifier.weight(1f).remembered(browser.focus, "form:password"), secret = true, onSubmit = browser::connect)
+                        AuroraChip("Запомнить", onClick = browser::toggleRemember, icon = Icons.Key, selected = browser.remember,
+                            modifier = Modifier.remembered(browser.focus, "form:remember"))
                         AuroraButton(if (browser.connecting) "Подключаюсь…" else "Подключить", onClick = browser::connect, icon = Icons.Check, accent = true,
                             modifier = Modifier.remembered(browser.focus, "form:connect"))
                     }
-                    Text("Пароль хранится только до закрытия приложения. Нужен SMB 2.x; для домена укажите DOMAIN\\user.",
-                        style = MaterialTheme.typography.bodySmall, color = Aurora.faint)
+                    if (browser.shares.isNotEmpty()) ChipLine("Папки на сервере") {
+                        items(browser.shares, key = { "share:$it" }) { name ->
+                            AuroraChip(name, onClick = { browser.chooseShare(name) }, icon = Icons.Folder, modifier = Modifier.remembered(browser.focus, "share:$name"))
+                        }
+                    }
+                    Text(
+                        "Не знаете имя папки — оставьте поле пустым, плеер покажет все папки сервера. " +
+                            if (browser.remember) "Пароль хранится зашифрованным только на этом ТВ — после перезапуска папка откроется сама. SMB 2 или 3; для домена укажите DOMAIN\\user."
+                        else "Пароль не сохраняется: после закрытия приложения его нужно ввести снова. SMB 2 или 3; для домена укажите DOMAIN\\user.",
+                        style = MaterialTheme.typography.bodySmall, color = Aurora.faint,
+                    )
                 }
             }
         } else null,
@@ -137,6 +164,15 @@ fun NetworkScreen(vm: MainViewModel) {
         playback = vm.playback,
         onOpen = { entry -> browser.open(entry)?.let { vm.send(UiEvent.Play(it)) } },
     )
+}
+
+/** A caption and a horizontally scrolling line of chips; the remote moves along it with ←/→. */
+@Composable
+private fun ChipLine(label: String, content: LazyListScope.() -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = Aurora.muted, modifier = Modifier.width(150.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 4.dp), content = content)
+    }
 }
 
 @Composable
