@@ -11,11 +11,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import com.aurora.tvplayer.player.Panel
 import com.aurora.tvplayer.player.PanelOption
 import com.aurora.tvplayer.player.PlayerActions
@@ -31,6 +35,7 @@ import com.aurora.tvplayer.ui.components.FocusMemory
 import com.aurora.tvplayer.ui.device.DeviceScreen
 import com.aurora.tvplayer.ui.home.HomeScreen
 import com.aurora.tvplayer.ui.theme.AuroraBackground
+import com.aurora.tvplayer.ui.theme.Aurora
 import com.aurora.tvplayer.ui.theme.AuroraTheme
 import com.aurora.tvplayer.ui.theme.Icons
 import org.junit.Assume.assumeTrue
@@ -78,6 +83,10 @@ class ScreenshotTest {
     private fun shoot(name: String, content: @Composable () -> Unit) {
         compose.setContent { AuroraTheme { content() } }
         compose.waitForIdle()
+        save(name)
+    }
+
+    private fun save(name: String) {
         compose.mainClock.advanceTimeBy(1_500)
         compose.waitForIdle()
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
@@ -199,6 +208,64 @@ class ScreenshotTest {
     @Test
     fun player() = shoot("05-player") {
         Frame { PlayerOverlay(playerState(), NoActions) }
+    }
+
+    private val notes = com.aurora.tvplayer.data.Updater.plainNotes(
+        """
+        ## Домашняя сеть
+        - **«Запомнить пароль»**: хранится зашифрованным только на этом ТВ. После перезапуска сетевая папка и «Продолжить» открываются сами.
+        - Сохранённые подключения, поиск NAS в сети, список папок сервера.
+        - Поддержка SMB 3 и понятные сообщения об ошибках.
+
+        ## Просмотр
+        - Субтитры рядом с видео (`Фильм.srt`) подключаются сами, кириллица в Windows-1251 больше не ломается.
+        - Плавная перемотка: при удержании ←/→ плеер переходит один раз, когда кнопку отпустили.
+        - При обрыве связи плеер сам переподключается.
+        - Таймер сна: 15 мин – 2 ч или «после этого файла».
+        - «Закончится в 23:41» под часами, обратный отсчёт до следующей серии.
+        - Аудио и субтитры запоминаются для каждого сериала.
+
+        ## Прочее
+        - Настраиваемая перемотка назад, «Отчёт о сбое» в «Мой телевизор».
+        - Исправлены двойной запуск плеера и зависание установки обновления.
+        """.trimIndent(),
+    ) + "\n\nПлеер закроется на пару секунд. Настройки, история и позиции просмотра сохранятся."
+
+    @Composable
+    private fun UpdateDialog() {
+        val focus = remember { FocusRequester() }
+        AuroraBackground(animated = false) {
+            Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                Box(
+                    Modifier.width(620.dp).background(Aurora.navyDeep.copy(alpha = 0.97f), androidx.compose.foundation.shape.RoundedCornerShape(20.dp)).padding(28.dp),
+                ) {
+                    com.aurora.tvplayer.ui.components.MessageBody(
+                        com.aurora.tvplayer.ui.components.DialogSpec.Message(
+                            "Обновить до 3.4.0?", notes,
+                            listOf(com.aurora.tvplayer.ui.components.DialogAction("Установить", Icons.Up, accent = true) {}),
+                            dismissLabel = "Отменить",
+                        ),
+                        onDismiss = {}, first = focus,
+                    )
+                }
+            }
+        }
+        androidx.compose.runtime.LaunchedEffect(Unit) { focus.requestFocus() }
+    }
+
+    @Test
+    fun updateDialog() = shoot("13-update-dialog") { UpdateDialog() }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun updateDialogScrolled() {
+        compose.setContent { AuroraTheme { UpdateDialog() } }
+        compose.waitForIdle()
+        repeat(6) {
+            compose.onRoot().performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionDown) }
+            compose.waitForIdle()
+        }
+        save("13-update-dialog-scrolled")
     }
 
     @Test

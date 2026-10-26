@@ -1,7 +1,9 @@
 package com.aurora.tvplayer.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,8 +25,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -33,6 +37,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -51,6 +65,7 @@ import com.aurora.tvplayer.ui.decor.LocalOccasion
 import com.aurora.tvplayer.ui.decor.cardDecor
 import com.aurora.tvplayer.ui.theme.Aurora
 import com.aurora.tvplayer.ui.theme.Icons
+import kotlinx.coroutines.launch
 
 /** 16:9 card for a video: placeholder art, progress, title. */
 @Composable
@@ -99,11 +114,12 @@ fun VideoCard(
     }
 }
 
-data class DialogAction(val label: String, val icon: ImageVector? = null, val onClick: () -> Unit)
+/** [accent] marks the main action: it comes first, highlighted, and takes the focus. */
+data class DialogAction(val label: String, val icon: ImageVector? = null, val accent: Boolean = false, val onClick: () -> Unit)
 
 /** One dialog at a time, rendered by the screen root. */
 sealed interface DialogSpec {
-    data class Message(val title: String, val text: String, val actions: List<DialogAction> = emptyList()) : DialogSpec
+    data class Message(val title: String, val text: String, val actions: List<DialogAction> = emptyList(), val dismissLabel: String = "Закрыть") : DialogSpec
     data class Choice(val title: String, val options: List<String>, val selected: Int = -1, val text: String? = null, val onChoose: (Int) -> Unit) : DialogSpec
     data class Input(val title: String, val hint: String, val initial: String, val confirm: String, val onConfirm: (String) -> Unit) : DialogSpec
     data class Report(val title: String, val sections: List<ReportSection>, val actions: List<DialogAction> = emptyList()) : DialogSpec
@@ -119,16 +135,7 @@ fun DialogHost(spec: DialogSpec, onDismiss: () -> Unit) {
         ) {
             val first = remember { FocusRequester() }
             when (spec) {
-                is DialogSpec.Message -> {
-                    DialogTitle(spec.title)
-                    Text(spec.text, style = MaterialTheme.typography.bodyLarge, color = Aurora.muted,
-                        modifier = Modifier.heightIn(max = 330.dp).verticalScroll(rememberScrollState()))
-                    Spacer(Modifier.height(22.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        AuroraButton("Закрыть", onClick = onDismiss, modifier = Modifier.focusRequester(first))
-                        spec.actions.forEach { action -> AuroraButton(action.label, icon = action.icon, onClick = { onDismiss(); action.onClick() }) }
-                    }
-                }
+                is DialogSpec.Message -> MessageBody(spec, onDismiss, first)
                 is DialogSpec.Choice -> {
                     DialogTitle(spec.title)
                     spec.text?.let {
@@ -187,6 +194,66 @@ fun DialogHost(spec: DialogSpec, onDismiss: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * Title, text and buttons of a message. Focus stays on the buttons and ▲/▼ scroll the text, so
+ * a long changelog reads on a remote without hunting for a focusable spot; the buttons stay
+ * below the text and never scroll away.
+ */
+@Composable
+internal fun MessageBody(spec: DialogSpec.Message, onDismiss: () -> Unit, first: FocusRequester) {
+    val scroll = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    val step = with(LocalDensity.current) { 150.dp.toPx() }
+    // Derived flags: the scroll position itself changes every frame and is read only while drawing.
+    val scrollable by remember { derivedStateOf { scroll.maxValue > 0 } }
+    val atEnd by remember { derivedStateOf { scroll.value >= scroll.maxValue } }
+    Column(
+        Modifier.onPreviewKeyEvent { event ->
+            val down = event.key == Key.DirectionDown
+            if (!scrollable || event.type != KeyEventType.KeyDown || (!down && event.key != Key.DirectionUp)) return@onPreviewKeyEvent false
+            scope.launch { scroll.animateScrollBy(if (down) step else -step) }
+            true
+        },
+    ) {
+        DialogTitle(spec.title)
+        Box(Modifier.heightIn(max = 320.dp)) {
+            Text(spec.text, style = MaterialTheme.typography.bodyLarge, color = Aurora.muted,
+                modifier = Modifier.verticalScroll(scroll).padding(end = if (scrollable) 18.dp else 0.dp))
+            if (scrollable) ScrollIndicator(scroll, Modifier.matchParentSize())
+        }
+        Spacer(Modifier.height(22.dp))
+        val main = spec.actions.filter { it.accent }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            main.forEachIndexed { index, action ->
+                AuroraButton(action.label, icon = action.icon, accent = true, onClick = { onDismiss(); action.onClick() },
+                    modifier = if (index == 0) Modifier.focusRequester(first) else Modifier)
+            }
+            AuroraButton(spec.dismissLabel, onClick = onDismiss, modifier = if (main.isEmpty()) Modifier.focusRequester(first) else Modifier)
+            (spec.actions - main.toSet()).forEach { action -> AuroraButton(action.label, icon = action.icon, onClick = { onDismiss(); action.onClick() }) }
+            if (scrollable) {
+                Spacer(Modifier.weight(1f))
+                Text(if (!atEnd) "▼ ещё текст · ▲▼ — листать" else "▲ — к началу", style = MaterialTheme.typography.bodySmall, color = Aurora.faint)
+            }
+        }
+    }
+}
+
+/** Thin bar at the right edge: where the visible part of the text is. */
+@Composable
+private fun ScrollIndicator(scroll: ScrollState, modifier: Modifier) {
+    Box(modifier.drawBehind {
+        val max = scroll.maxValue.coerceAtLeast(1)
+        val value = scroll.value
+        val width = 4.dp.toPx()
+        val x = size.width - width
+        val track = size.height
+        val thumb = (track * track / (track + max)).coerceAtLeast(24.dp.toPx())
+        val y = (track - thumb) * value / max
+        drawRoundRect(Aurora.white.copy(alpha = 0.12f), Offset(x, 0f), Size(width, track), CornerRadius(width / 2))
+        drawRoundRect(Aurora.cyan, Offset(x, y), Size(width, thumb), CornerRadius(width / 2))
+    })
 }
 
 @Composable

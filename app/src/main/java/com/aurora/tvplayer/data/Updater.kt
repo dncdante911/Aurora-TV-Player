@@ -253,6 +253,18 @@ class Updater(private val context: Context) {
             return false
         }
 
+        /**
+         * GitHub release notes are Markdown; the TV shows plain text. Headings become capitals,
+         * list items get "•", emphasis and code marks go, links keep their text.
+         */
+        fun plainNotes(markdown: String): String = markdown.replace("\r\n", "\n").lines().joinToString("\n") { raw ->
+            val heading = Regex("^\\s{0,3}#{1,6}\\s+").find(raw)
+            (if (heading != null) raw.substring(heading.range.last + 1).uppercase() else raw).trimEnd()
+                .replace(Regex("^(\\s*)[-*+]\\s+"), "$1• ")
+                .replace(Regex("\\[([^\\]]+)]\\([^)]*\\)"), "$1")
+                .replace(Regex("\\*\\*|__|`"), "")
+        }.replace(Regex("\n{3,}"), "\n\n").trim()
+
         private fun parts(version: String): List<Int>? =
             Regex("\\d+(?:\\.\\d+)*").find(version)?.value?.split('.')?.map { it.toInt() }
     }

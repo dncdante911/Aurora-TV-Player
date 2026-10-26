@@ -288,15 +288,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             show(DialogSpec.Message(
                 "Разрешите установку обновлений",
                 "Android один раз попросит разрешить Aurora TV устанавливать приложения. Включите переключатель и вернитесь — обновление продолжится.",
-                listOf(DialogAction("Открыть настройки", Icons.Settings) { send(UiEvent.AllowInstalls) }),
+                listOf(DialogAction("Открыть настройки", Icons.Settings, accent = true) { send(UiEvent.AllowInstalls) }),
+                dismissLabel = "Отменить",
             ))
             return
         }
-        val notes = ready.release.notes.ifBlank { "Новая версия Aurora TV." }.take(1_200)
+        // The dialog scrolls with ▲/▼, so the whole changelog fits; the cap only guards against a runaway body.
+        val notes = com.aurora.tvplayer.data.Updater.plainNotes(ready.release.notes).ifBlank { "Новая версия Aurora TV." }.take(8_000)
         show(DialogSpec.Message(
             "Обновить до ${ready.release.version}?",
             "$notes\n\nПлеер закроется на пару секунд. Настройки, история и позиции просмотра сохранятся.",
-            listOf(DialogAction("Установить", Icons.Up) { updater.install() }),
+            listOf(DialogAction("Установить", Icons.Up, accent = true) { updater.install() }),
+            dismissLabel = "Отменить",
         ))
     }
 

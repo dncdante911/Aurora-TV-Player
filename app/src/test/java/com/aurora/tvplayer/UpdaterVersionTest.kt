@@ -1,6 +1,7 @@
 package com.aurora.tvplayer
 
 import com.aurora.tvplayer.data.Updater
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,5 +22,11 @@ class UpdaterVersionTest {
         assertFalse(Updater.isNewer("3.1.2", "3.1.3"))
         assertFalse(Updater.isNewer("3.1.10", "3.2"))
         assertFalse(Updater.isNewer("latest", "3.1.3"))
+    }
+
+    @Test
+    fun releaseNotesLoseMarkdown() {
+        val markdown = "## Домашняя сеть\r\n- **Запомнить** пароль\r\n* файл `Фильм.srt`, [подробнее](https://example.com)\r\n\r\n\r\n\r\nКонец"
+        assertEquals("ДОМАШНЯЯ СЕТЬ\n• Запомнить пароль\n• файл Фильм.srt, подробнее\n\nКонец", Updater.plainNotes(markdown))
     }
 }
