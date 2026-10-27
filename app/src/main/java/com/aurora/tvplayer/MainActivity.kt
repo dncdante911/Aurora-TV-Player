@@ -1,6 +1,7 @@
 package com.aurora.tvplayer
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
@@ -8,6 +9,8 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
 import android.speech.RecognizerIntent
+import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +28,7 @@ import com.aurora.tvplayer.ui.UiEvent
 import com.aurora.tvplayer.ui.browser.LocalBrowserViewModel
 import com.aurora.tvplayer.ui.components.DialogAction
 import com.aurora.tvplayer.ui.components.DialogSpec
+import com.aurora.tvplayer.ui.components.PointerMotion
 import com.aurora.tvplayer.ui.theme.AuroraTheme
 import com.aurora.tvplayer.ui.theme.Icons
 import kotlinx.coroutines.launch
@@ -34,6 +38,7 @@ class MainActivity : ComponentActivity() {
     private val files: LocalBrowserViewModel by viewModels()
     private var accessSettingsOpened = false
     private var lastPlayAt = 0L
+    private val cursor by lazy { RemoteCursor(this) }
 
     private val pickFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@registerForActivityResult
@@ -60,14 +65,30 @@ class MainActivity : ComponentActivity() {
     private val readStorage = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) files.retryPendingVolume() else vm.toast("Доступ к файлам не разрешён")
     }
+    private val writeStorage = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        vm.toast(if (granted) "Разрешено — повторите действие" else "Без разрешения файлы можно только смотреть")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { AuroraTheme { AppRoot(vm) } }
+        cursor.attach()
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) { vm.uiEvents.collect(::handle) }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) { vm.settings.state.collect { cursor.enabled = it.remoteCursor } }
+        }
         if (savedInstanceState == null) handleViewIntent(intent)
+    }
+
+    /** The remote's pointer sees the arrows and OK first; «Назад» always keeps its meaning. */
+    @SuppressLint("RestrictedApi") // ComponentActivity marks the override restricted; overriding it is how keys are seen first.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = cursor.onKey(event) || super.dispatchKeyEvent(event)
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_HOVER_MOVE) PointerMotion.moved()
+        return super.dispatchGenericMotionEvent(event)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -116,6 +137,7 @@ class MainActivity : ComponentActivity() {
             is UiEvent.Voice -> startVoice(event.language)
             UiEvent.CancelVoice -> voiceInput.cancel()
             is UiEvent.RequestStorageAccess -> requestStorageAccess()
+            UiEvent.RequestWriteAccess -> writeStorage.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
             UiEvent.OpenAppSettings -> openAppDetails()
             UiEvent.AllowInstalls -> runCatching {
                 startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:$packageName".toUri()))
@@ -161,7 +183,7 @@ class MainActivity : ComponentActivity() {
         vm.show(DialogSpec.Message(
             "Доступ к USB и файлам",
             "Чтобы показывать папки USB-накопителя, Android 11+ требует разрешение «Доступ ко всем файлам». " +
-                "Включите его для Aurora TV и вернитесь сюда. Плеер ничего не изменяет и не удаляет.",
+                "Включите его для Aurora TV и вернитесь сюда. Файлы меняются только по вашей команде: переименовать, переместить или удалить.",
             listOf(DialogAction("Открыть настройки", Icons.Settings) { openAccessSettings() }),
         ))
     }

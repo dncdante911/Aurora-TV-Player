@@ -11,10 +11,11 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -117,14 +118,18 @@ fun AuroraBackground(animated: Boolean, modifier: Modifier = Modifier, decor: De
     Box(
         modifier
             .fillMaxSize()
-            .drawBehind {
-                drawRect(Aurora.backdrop)
-                val t = drift()
+            // Gradients are built once per size and only moved each frame: a new radial shader
+            // 60 times a second is wasted work on a TV chip.
+            .drawWithCache {
                 val r = size.maxDimension * 0.55f
-                val mint = Offset(size.width * (0.15f + 0.25f * t), size.height * (0.05f + 0.1f * t))
-                drawCircle(Brush.radialGradient(listOf(first.copy(alpha = 0.16f * strength), Color.Transparent), mint, r), r, mint)
-                val violet = Offset(size.width * (0.95f - 0.2f * t), size.height * (0.85f - 0.15f * t))
-                drawCircle(Brush.radialGradient(listOf(second.copy(alpha = 0.13f * strength), Color.Transparent), violet, r), r, violet)
+                val firstGlow = Brush.radialGradient(listOf(first.copy(alpha = 0.16f * strength), Color.Transparent), Offset.Zero, r)
+                val secondGlow = Brush.radialGradient(listOf(second.copy(alpha = 0.13f * strength), Color.Transparent), Offset.Zero, r)
+                onDrawBehind {
+                    drawRect(Aurora.backdrop)
+                    val t = drift()
+                    translate(size.width * (0.15f + 0.25f * t), size.height * (0.05f + 0.1f * t)) { drawCircle(firstGlow, r, Offset.Zero) }
+                    translate(size.width * (0.95f - 0.2f * t), size.height * (0.85f - 0.15f * t)) { drawCircle(secondGlow, r, Offset.Zero) }
+                }
             },
     ) {
         decor?.let { DecorBackdrop(it) }

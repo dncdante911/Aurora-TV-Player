@@ -16,8 +16,8 @@ android {
         minSdk 28
         //noinspection OldTargetApi
         targetSdk 36
-        versionCode 23
-        versionName '3.4.0'
+        versionCode 24
+        versionName '3.5.0'
         // TVs and set-top boxes are ARM; x86 builds would only add ~12 MB of FFmpeg for emulators.
         //noinspection ChromeOsAbiSupport
         ndk { abiFilters 'armeabi-v7a', 'arm64-v8a' }

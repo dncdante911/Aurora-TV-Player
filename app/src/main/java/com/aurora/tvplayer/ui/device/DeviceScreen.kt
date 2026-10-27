@@ -96,6 +96,15 @@ fun DeviceScreen(vm: MainViewModel) {
                 vm.open(Screen.Capabilities)
             }
         }
+        item { Label("Управление") }
+        item {
+            Setting(Icons.Mouse, "Курсор пультом",
+                "Стрелки двигают указатель, OK — нажать, долгое OK — меню, «Назад» работает как обычно. " +
+                    "Мышь работает всегда: левая кнопка — нажать, правая — меню, колесо — прокрутка.",
+                toggle = settings.remoteCursor, modifier = Modifier.remembered(memory, "cursor")) {
+                vm.settings.setRemoteCursor(!settings.remoteCursor)
+            }
+        }
         item { Label("Просмотр") }
         item {
             Setting(Icons.Play, "Следующая серия автоматически", "После конца файла сразу запускается следующий из папки.",

@@ -1,5 +1,10 @@
 package com.aurora.tvplayer.ui.home
 
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -30,13 +35,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Glow
+import androidx.tv.material3.Icon
+import androidx.tv.material3.LocalContentColor
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.aurora.tvplayer.R
+import com.aurora.tvplayer.aurora
+import com.aurora.tvplayer.data.DevicePower
 import com.aurora.tvplayer.data.Media
 import com.aurora.tvplayer.data.Support
 import com.aurora.tvplayer.data.UpdateState
@@ -44,6 +60,7 @@ import com.aurora.tvplayer.ui.MainViewModel
 import com.aurora.tvplayer.ui.Screen
 import com.aurora.tvplayer.ui.UiEvent
 import com.aurora.tvplayer.ui.components.InitialFocus
+import com.aurora.tvplayer.ui.components.pointerClick
 import com.aurora.tvplayer.ui.components.SourceCard
 import com.aurora.tvplayer.ui.components.VideoCard
 import com.aurora.tvplayer.ui.components.remembered
@@ -87,8 +104,13 @@ fun HomeScreen(vm: MainViewModel) {
             }
             item(key = "sources") {
                 Column(Modifier.padding(horizontal = 48.dp)) {
-                    Text("Выберите источник", style = MaterialTheme.typography.headlineSmall, color = Aurora.white)
-                    Text("USB, папки компьютера и сетевые ссылки", style = MaterialTheme.typography.bodyMedium, color = Aurora.muted)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Выберите источник", style = MaterialTheme.typography.headlineSmall, color = Aurora.white)
+                            Text("USB, папки компьютера и сетевые ссылки", style = MaterialTheme.typography.bodyMedium, color = Aurora.muted)
+                        }
+                        if (Support.available) SupportPill(onClick = { vm.open(Screen.Support) }, modifier = Modifier.remembered(memory, "support:pill"))
+                    }
                     Spacer(Modifier.height(14.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         SourceCard(Icons.Usb, "USB / папки", "Встроенный проводник", { vm.open(Screen.Files()) },
@@ -160,10 +182,6 @@ fun HomeScreen(vm: MainViewModel) {
                             Modifier.weight(1f).remembered(memory, "more:sound"), compact = true)
                         SourceCard(Icons.Tv, "Мой телевизор", "Настройки и возможности", { vm.open(Screen.Device) },
                             Modifier.weight(1f).remembered(memory, "more:device"), compact = true)
-                        if (Support.available) {
-                            SourceCard(Icons.Favorite, "Поддержать", "Спасибо автору", { vm.open(Screen.Support) },
-                                Modifier.weight(1f).remembered(memory, "more:support"), compact = true)
-                        }
                     }
                 }
             }
@@ -183,6 +201,58 @@ private fun Header() {
                 .background(Aurora.navyDeep.copy(alpha = 0.55f), RoundedCornerShape(50))
                 .padding(horizontal = 14.dp, vertical = 4.dp),
         ) { Clock() }
+    }
+}
+
+private val Rose = Color(0xFFFF7EA8)
+
+/**
+ * «Поддержать автора» where the eye lands, without shouting: a thin rose outline on the line of
+ * the heading, a heart that beats softly once every few seconds (only with the live look), and
+ * a filled pill under focus.
+ */
+@Composable
+private fun SupportPill(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val settings by context.aurora.settings.state.collectAsStateWithLifecycle()
+    val beat = if (DevicePower.liveLookOn(context, settings.liveLook)) {
+        rememberInfiniteTransition(label = "heart").animateFloat(
+            initialValue = 1f, targetValue = 1f, label = "beat",
+            animationSpec = infiniteRepeatable(keyframes {
+                durationMillis = 5_000
+                1f at 0
+                1.22f at 180
+                1f at 380
+                1.14f at 560
+                1f at 760
+            }),
+        )
+    } else null
+    val shape = RoundedCornerShape(50)
+    Surface(
+        onClick = onClick,
+        modifier = modifier.pointerClick(onClick),
+        shape = ClickableSurfaceDefaults.shape(shape),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = Rose.copy(alpha = 0.10f), contentColor = Aurora.white,
+            focusedContainerColor = Rose, focusedContentColor = Aurora.navy,
+        ),
+        border = ClickableSurfaceDefaults.border(
+            border = Border(BorderStroke(1.dp, Rose.copy(alpha = 0.55f)), shape = shape),
+            focusedBorder = Border(BorderStroke(2.dp, Aurora.white), shape = shape),
+        ),
+        glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Rose.copy(alpha = 0.45f), 14.dp)),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+    ) {
+        Row(Modifier.padding(horizontal = 18.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Favorite, null, Modifier.size(20.dp).graphicsLayer { val s = beat?.value ?: 1f; scaleX = s; scaleY = s },
+                tint = if (LocalContentColor.current == Aurora.navy) Aurora.navy else Rose)
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text("Поддержать автора", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                Text("Плеер бесплатный и без рекламы", style = MaterialTheme.typography.bodySmall, color = LocalContentColor.current.copy(alpha = 0.7f), maxLines = 1)
+            }
+        }
     }
 }
 

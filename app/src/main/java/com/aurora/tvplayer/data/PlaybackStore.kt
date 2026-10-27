@@ -39,8 +39,11 @@ class PlaybackStore(context: Context) {
         watched = prefs.getBoolean(watchedKey(uri), false),
     )
 
+    /** Called every few seconds while playing: position and history go to disk in one write. */
     fun save(uri: String, title: String, folder: String?, positionMs: Long, durationMs: Long) {
         val nearEnd = durationMs > 0 && positionMs >= durationMs * 0.95
+        val entry = HistoryEntry(uri, title, folder, System.currentTimeMillis())
+        val history = (listOf(entry) + mutableHistory.value.filterNot { it.uri == uri }).take(MAX_HISTORY)
         prefs.edit {
             if (nearEnd) {
                 remove(positionKey(uri))
@@ -51,8 +54,9 @@ class PlaybackStore(context: Context) {
             }
             if (durationMs > 0) putLong(durationKey(uri), durationMs)
             putInt(seenKey(uri), today())
+            putString(KEY_HISTORY, encode(history))
         }
-        remember(uri, title, folder)
+        publish(history)
     }
 
     fun markWatched(uri: String) {
@@ -65,13 +69,33 @@ class PlaybackStore(context: Context) {
     }
 
     fun forget(uri: String) {
+        val history = mutableHistory.value.filterNot { it.uri == uri }
         prefs.edit {
             remove(positionKey(uri))
             remove(watchedKey(uri))
             remove(durationKey(uri))
             remove(seenKey(uri))
+            putString(KEY_HISTORY, encode(history))
         }
-        writeHistory(mutableHistory.value.filterNot { it.uri == uri })
+        publish(history)
+    }
+
+    /** A file was renamed or moved: its position, "watched" mark and history entry follow it. */
+    fun move(from: String, to: String, title: String, folder: String?) {
+        if (from == to) return
+        val position = prefs.getLong(positionKey(from), 0)
+        val duration = prefs.getLong(durationKey(from), 0)
+        val watched = prefs.getBoolean(watchedKey(from), false)
+        val history = mutableHistory.value.map { if (it.uri == from) it.copy(uri = to, title = title, folder = folder) else it }
+        prefs.edit {
+            (TRACKED + "seen_").forEach { remove(it + from.hashCode()) }
+            if (position > 0) putLong(positionKey(to), position)
+            if (duration > 0) putLong(durationKey(to), duration)
+            if (watched) putBoolean(watchedKey(to), true)
+            putInt(seenKey(to), today())
+            putString(KEY_HISTORY, encode(history))
+        }
+        publish(history)
     }
 
     fun clearHistory() = writeHistory(emptyList())
@@ -100,22 +124,19 @@ class PlaybackStore(context: Context) {
         }
     }
 
-    private fun remember(uri: String, title: String, folder: String?) {
-        val entry = HistoryEntry(uri, title, folder, System.currentTimeMillis())
-        writeHistory((listOf(entry) + mutableHistory.value.filterNot { it.uri == uri }).take(MAX_HISTORY))
+    private fun writeHistory(entries: List<HistoryEntry>) {
+        prefs.edit { putString(KEY_HISTORY, encode(entries)) }
+        publish(entries)
     }
 
-    private fun writeHistory(entries: List<HistoryEntry>) {
+    private fun publish(entries: List<HistoryEntry>) {
         mutableHistory.value = entries
         mutableRevision.value++
-        prefs.edit {
-            putString(KEY_HISTORY, JSONArray().apply {
-                entries.forEach { e ->
-                    put(JSONObject().put("uri", e.uri).put("title", e.title).put("folder", e.folder).put("at", e.updatedAt))
-                }
-            }.toString())
-        }
     }
+
+    private fun encode(entries: List<HistoryEntry>): String = JSONArray().apply {
+        entries.forEach { e -> put(JSONObject().put("uri", e.uri).put("title", e.title).put("folder", e.folder).put("at", e.updatedAt)) }
+    }.toString()
 
     private fun readHistory(): List<HistoryEntry> {
         prefs.getString(KEY_HISTORY, null)?.let { raw ->

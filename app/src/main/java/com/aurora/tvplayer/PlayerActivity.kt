@@ -1,6 +1,7 @@
 package com.aurora.tvplayer
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.content.Intent
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
@@ -10,6 +11,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -34,6 +36,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -59,6 +62,7 @@ import com.aurora.tvplayer.player.PlayerActions
 import com.aurora.tvplayer.player.PlayerOverlay
 import com.aurora.tvplayer.player.PlayerUiState
 import com.aurora.tvplayer.player.RoutingDataSource
+import com.aurora.tvplayer.ui.components.PointerMotion
 import com.aurora.tvplayer.ui.theme.AuroraTheme
 import com.aurora.tvplayer.ui.theme.Icons
 import kotlinx.coroutines.Dispatchers
@@ -122,6 +126,8 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     private var sleepAtEnd = false
     private var sleepWarned = false
 
+    private val cursor by lazy { RemoteCursor(this, onMove = ::pointerMoved) }
+
     private val pickSubtitle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(::attachSubtitle) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -145,6 +151,8 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
                 }
             }
         }
+        cursor.attach()
+        cursor.enabled = aurora.settings.current.remoteCursor
     }
 
     override fun onStart() {
@@ -206,6 +214,7 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
             )
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .setHandleAudioBecomingNoisy(true)
+            .setLoadControl(loadControl())
             .build()
         exo.pauseAtEndOfMediaItems = !settings.autoplayNext || sleepAtEnd
         exo.addAnalyticsListener(object : AnalyticsListener {
@@ -233,6 +242,20 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
                 delay(500)
             }
         }
+    }
+
+    /**
+     * The buffer lives in the Java heap. Media3's fixed ~130 MB is too much for boxes that give an
+     * app 256 MB (with FFmpeg and the UI that ends in OutOfMemoryError) and too little for a 4K
+     * remux over Wi-Fi on a TV with a big heap (about 10 s at 100 Mbit/s). A third of the heap,
+     * 48–192 MB, covers both.
+     */
+    private fun loadControl(): DefaultLoadControl {
+        val heapMb = getSystemService(ActivityManager::class.java)?.largeMemoryClass ?: 256
+        return DefaultLoadControl.Builder()
+            .setTargetBufferBytes((heapMb / 3).coerceIn(48, 192) shl 20)
+            .setPrioritizeTimeOverSizeThresholds(false)
+            .build()
     }
 
     private fun mediaItem(item: PlayItem): MediaItem = MediaItem.Builder().setUri(item.uri).setMediaId(item.uri)
@@ -482,6 +505,33 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
     // PlayerActions
 
     override fun userActivity() = scheduleHide()
+
+    /** Drags call this many times a second: the target follows, one seek when it settles. */
+    override fun seekToFraction(fraction: Float) {
+        val exo = player ?: return
+        if (exo.duration <= 0) return
+        val target = (exo.duration * fraction.coerceIn(0f, 1f)).toLong()
+        seekBy(target - (if (pendingSeek != C.TIME_UNSET) pendingSeek else exo.currentPosition.coerceAtLeast(0)))
+        showControls()
+    }
+
+    override fun tapScreen() {
+        if (ui.panel != null) closePanel()
+        else if (ui.controls && ui.error == null && !ui.ended) hideControls() else showControls()
+    }
+
+    /** Mouse or the remote's pointer moved: bring the controls up, as any key does. */
+    private fun pointerMoved() {
+        if (!ui.controls) showControls() else userActivity()
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_HOVER_MOVE) {
+            PointerMotion.moved()
+            pointerMoved()
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
 
     override fun togglePlay() {
         val exo = player ?: return
@@ -1052,6 +1102,7 @@ class PlayerActivity : ComponentActivity(), PlayerActions {
 
     @SuppressLint("RestrictedApi") // ComponentActivity marks the override restricted; overriding it is how keys are seen first.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (cursor.onKey(event)) return true
         val exo = player ?: return super.dispatchKeyEvent(event)
         val key = event.keyCode
         val down = event.action == KeyEvent.ACTION_DOWN

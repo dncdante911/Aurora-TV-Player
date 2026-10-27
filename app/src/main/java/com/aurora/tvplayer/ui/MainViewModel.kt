@@ -49,6 +49,8 @@ sealed interface UiEvent {
     data object PickFile : UiEvent
     data class Voice(val language: String) : UiEvent
     data class RequestStorageAccess(val volume: File) : UiEvent
+    /** Android 9–10: changing files needs the write permission. */
+    data object RequestWriteAccess : UiEvent
     data object OpenAppSettings : UiEvent
     data object AllowInstalls : UiEvent
     data object CancelVoice : UiEvent

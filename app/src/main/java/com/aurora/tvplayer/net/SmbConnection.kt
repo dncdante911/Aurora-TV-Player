@@ -22,7 +22,7 @@ import kotlin.concurrent.thread
 data class SmbLogin(val domain: String, val user: String, val password: String)
 
 /**
- * One read-only SMB share at a time. Saved servers ([SavedServers]) let it come back by itself
+ * One SMB share at a time. Files change only on the user's command from the browser ([com.aurora.tvplayer.ui.browser.SmbFiles]). Saved servers ([SavedServers]) let it come back by itself
  * after Android stopped the app, so "Продолжить" and the player never ask for the password again.
  */
 class SmbConnection private constructor(
@@ -32,7 +32,7 @@ class SmbConnection private constructor(
     /** Connected with SMB 3 after SMB 2 was refused. */
     val smb3: Boolean,
 ) {
-    class Entry(val name: String, val url: String, val directory: Boolean, val size: Long) {
+    class Entry(val name: String, val url: String, val directory: Boolean, val size: Long, val modified: Long = 0) {
         val video: Boolean get() = !directory && Media.isVideo(name)
         val subtitle: Boolean get() = !directory && Media.isSubtitle(name)
     }
@@ -46,7 +46,9 @@ class SmbConnection private constructor(
                 folder.listFiles().map { child ->
                     child.use { item ->
                         val directory = item.isDirectory
-                        Entry(item.name.trimEnd('/'), item.path, directory, if (directory) 0 else runCatching { item.length() }.getOrDefault(0))
+                        // Size and date come with the directory listing; no extra round trip per file.
+                        Entry(item.name.trimEnd('/'), item.path, directory, if (directory) 0 else runCatching { item.length() }.getOrDefault(0),
+                            runCatching { item.lastModified() }.getOrDefault(0))
                     }
                 }
             }

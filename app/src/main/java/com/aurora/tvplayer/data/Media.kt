@@ -12,27 +12,47 @@ object Media {
         "flv", "3gp", "vob", "mts", "m2t", "wmv", "asf",
     )
     private val SUBTITLES = setOf("srt", "vtt", "ass", "ssa")
-    private val CHUNK = Regex("\\d+|\\D+")
 
     fun isVideo(name: String?): Boolean = name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in EXTENSIONS
 
     fun isSubtitle(name: String?): Boolean = name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in SUBTITLES
 
-    /** Natural order: "Серия 2" before "Серия 10". */
+    /**
+     * Natural order: "Серия 2" before "Серия 10", case ignored. Walks both strings in place:
+     * sorting a 2000-file folder makes ~20 000 comparisons, so nothing is allocated here.
+     */
     val naturalOrder: Comparator<String> = Comparator { a, b ->
-        val left = CHUNK.findAll(a.lowercase(Locale.ROOT)).map { it.value }.toList()
-        val right = CHUNK.findAll(b.lowercase(Locale.ROOT)).map { it.value }.toList()
-        for (i in 0 until minOf(left.size, right.size)) {
-            val x = left[i]
-            val y = right[i]
-            val result = if (x[0].isDigit() && y[0].isDigit()) {
-                val xs = x.trimStart('0')
-                val ys = y.trimStart('0')
-                xs.length.compareTo(ys.length).takeIf { it != 0 } ?: xs.compareTo(ys)
-            } else x.compareTo(y)
-            if (result != 0) return@Comparator result
+        var i = 0
+        var j = 0
+        while (i < a.length && j < b.length) {
+            val x = a[i]
+            val y = b[j]
+            if (x.isDigit() && y.isDigit()) {
+                // Compare whole numbers: skip leading zeros, then the longer number is bigger.
+                var xs = i
+                while (xs < a.length && a[xs] == '0') xs++
+                var ys = j
+                while (ys < b.length && b[ys] == '0') ys++
+                var xe = xs
+                while (xe < a.length && a[xe].isDigit()) xe++
+                var ye = ys
+                while (ye < b.length && b[ye].isDigit()) ye++
+                val lengths = (xe - xs).compareTo(ye - ys)
+                if (lengths != 0) return@Comparator lengths
+                for (k in 0 until xe - xs) {
+                    val digit = a[xs + k].compareTo(b[ys + k])
+                    if (digit != 0) return@Comparator digit
+                }
+                i = xe
+                j = ye
+            } else {
+                val result = x.lowercaseChar().compareTo(y.lowercaseChar())
+                if (result != 0) return@Comparator result
+                i++
+                j++
+            }
         }
-        left.size - right.size
+        (a.length - i).compareTo(b.length - j)
     }
 
     /** "02. Рейхенбах.mkv" -> "02. Рейхенбах". */

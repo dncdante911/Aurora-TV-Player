@@ -43,6 +43,8 @@ data class SettingsState(
     val autoUpdate: Boolean = true,
     val lastUpdateCheck: Long = 0,
     val decor: DecorMode = DecorMode.AUTO,
+    /** "Курсор пультом": the arrows move a mouse pointer instead of the focus. */
+    val remoteCursor: Boolean = false,
 )
 
 /** App preferences; track choices stay in "library" where the player always kept them. */
@@ -64,6 +66,7 @@ class AppSettings(context: Context) {
             autoUpdate = prefs.getBoolean("auto_update", true),
             lastUpdateCheck = prefs.getLong("last_update_check", 0),
             decor = runCatching { DecorMode.valueOf(prefs.getString("decor", null)!!) }.getOrDefault(DecorMode.AUTO),
+            remoteCursor = prefs.getBoolean("remote_cursor", false),
         )
     )
     val state: StateFlow<SettingsState> = mutableState.asStateFlow()
@@ -81,6 +84,7 @@ class AppSettings(context: Context) {
     fun setAutoUpdate(enabled: Boolean) = change { it.copy(autoUpdate = enabled) }
     fun setLastUpdateCheck(time: Long) = change { it.copy(lastUpdateCheck = time) }
     fun setDecor(mode: DecorMode) = change { it.copy(decor = mode) }
+    fun setRemoteCursor(enabled: Boolean) = change { it.copy(remoteCursor = enabled) }
 
     private fun change(transform: (SettingsState) -> SettingsState) {
         mutableState.update(transform)
@@ -98,6 +102,7 @@ class AppSettings(context: Context) {
             putBoolean("auto_update", s.autoUpdate)
             putLong("last_update_check", s.lastUpdateCheck)
             putString("decor", s.decor.name)
+            putBoolean("remote_cursor", s.remoteCursor)
         }
     }
 }

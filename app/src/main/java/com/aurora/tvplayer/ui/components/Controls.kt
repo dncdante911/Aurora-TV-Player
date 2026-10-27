@@ -102,7 +102,7 @@ fun AuroraButton(
     Surface(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.defaultMinSize(minHeight = 46.dp),
+        modifier = modifier.pointerClick(onClick, enabled = enabled).defaultMinSize(minHeight = 46.dp),
         shape = ClickableSurfaceDefaults.shape(ButtonShape),
         colors = auroraColors(container = if (accent) Aurora.panelHigh else Aurora.panel, content = if (accent) Aurora.cyan else Aurora.white),
         border = auroraBorder(ButtonShape, if (accent) Aurora.cyan.copy(alpha = 0.6f) else Aurora.line),
@@ -134,7 +134,7 @@ fun RoundButton(
     Surface(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.size(size),
+        modifier = modifier.pointerClick(onClick, enabled = enabled).size(size),
         shape = ClickableSurfaceDefaults.shape(CircleShape),
         colors = auroraColors(container = if (emphasized) Aurora.white.copy(alpha = 0.16f) else Aurora.white.copy(alpha = 0.08f)),
         border = auroraBorder(CircleShape, Aurora.white.copy(alpha = 0.14f)),
@@ -155,7 +155,7 @@ fun RoundButton(
 fun SourceCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
     Surface(
         onClick = onClick,
-        modifier = modifier.height(if (compact) 72.dp else 120.dp),
+        modifier = modifier.pointerClick(onClick).height(if (compact) 72.dp else 120.dp),
         shape = ClickableSurfaceDefaults.shape(CardShape),
         colors = auroraColors(container = Aurora.panel.copy(alpha = 0.92f)),
         border = auroraBorder(CardShape, Aurora.line),
@@ -198,7 +198,7 @@ fun AuroraChip(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     val shape = RoundedCornerShape(50)
     Surface(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.pointerClick(onClick),
         shape = ClickableSurfaceDefaults.shape(shape),
         colors = auroraColors(container = if (selected) Aurora.cyan.copy(alpha = 0.18f) else Aurora.panel, content = if (selected) Aurora.cyan else Aurora.white),
         border = auroraBorder(shape, if (selected) Aurora.cyan else Aurora.line),
@@ -224,7 +224,7 @@ fun AuroraRow(
     Surface(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.pointerClick(onClick, onLongClick).fillMaxWidth(),
         shape = ClickableSurfaceDefaults.shape(ButtonShape),
         colors = auroraColors(container = Aurora.panel.copy(alpha = if (dimmed) 0.45f else 0.85f), content = if (dimmed) Aurora.muted else Aurora.white),
         border = auroraBorder(ButtonShape, Aurora.line.copy(alpha = 0.6f)),
@@ -285,7 +285,7 @@ fun AuroraTextField(
     val keyboard = LocalSoftwareKeyboardController.current
     Surface(
         onClick = { editing = true },
-        modifier = modifier.focusRequester(focusRequester),
+        modifier = modifier.focusRequester(focusRequester).pointerClick({ editing = true }),
         shape = ClickableSurfaceDefaults.shape(ButtonShape),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Aurora.navyDeep.copy(alpha = 0.7f), contentColor = Aurora.white,

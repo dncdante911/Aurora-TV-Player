@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurora.tvplayer.aurora
@@ -30,12 +31,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.Locale
 
 enum class EntryKind { VOLUME, FOLDER, VIDEO, OTHER }
 
 /** One row of a file browser; [key] is the path or URL and identifies it for focus memory. */
-data class BrowserEntry(val key: String, val name: String, val kind: EntryKind, val size: Long, val playUri: String?)
+data class BrowserEntry(val key: String, val name: String, val kind: EntryKind, val size: Long, val playUri: String?, val modified: Long = 0)
 
 private fun isSystemFolder(name: String): Boolean {
     val lower = name.lowercase(Locale.ROOT)
@@ -43,9 +46,8 @@ private fun isSystemFolder(name: String): Boolean {
         lower == "android" || lower == "lost.dir" || lower == "system volume information"
 }
 
-private val browserOrder = compareBy<BrowserEntry> { it.kind != EntryKind.VOLUME }
-    .thenBy { it.kind != EntryKind.FOLDER }
-    .thenComparator { a, b -> Media.naturalOrder.compare(a.name, b.name) }
+/** A folder read earlier; reused while its modification time has not changed. */
+private class CachedFolder(val modified: Long, val entries: List<BrowserEntry>)
 
 /** USB and internal storage, read folder by folder (never the whole disk). */
 class LocalBrowserViewModel(application: Application) : AndroidViewModel(application) {
@@ -77,6 +79,16 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
     private var pendingTarget: File? = null
     private var job: Job? = null
     val focus = FocusMemory()
+    val sort = SortPreference(application.getSharedPreferences("library", 0))
+    val files = FileActions(
+        LocalFiles, playback, viewModelScope,
+        folderOf = { uri -> uri.toUri().path?.let { File(it).parent } },
+        changed = { cache.clear(); refresh() },
+    )
+    /** Going back up a level shows the folder at once instead of reading the USB again. */
+    private val cache = object : LinkedHashMap<String, CachedFolder>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedFolder>?) = size > 24
+    }
 
     val visible: List<BrowserEntry> by derivedStateOf {
         val needle = query.lowercase(Locale.ROOT)
@@ -87,7 +99,17 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
                 EntryKind.OTHER -> showAll
             }
             shown && entry.name.lowercase(Locale.ROOT).contains(needle)
-        }
+        }.sortedFor(sort.mode)
+    }
+
+    /** Subtitle files that belong to [entry] and travel with it. */
+    fun companionsOf(entry: BrowserEntry): List<String> =
+        if (entry.kind == EntryKind.VIDEO) Subtitles.matching(entry.name, entries.map { it.name }) else emptyList()
+
+    /** Android 11+: «Доступ ко всем файлам» covers writing too; 9–10 need the write permission. */
+    fun canWrite(): Boolean = when {
+        Build.VERSION.SDK_INT >= 30 -> folder?.let(::hasAccess) == true
+        else -> app.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
     }
 
     val atVolumes: Boolean get() = folder == null
@@ -174,26 +196,43 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
         folder = dir
         title = if (dir == base) rootName.ifEmpty { "Папки на диске" } else dir.name
         playback.lastFolder = dir.absolutePath
-        loading = true
         message = null
-        entries = emptyList()
+        // A cached folder shows at once; the check below replaces it if the disk changed.
+        val cached = cache[dir.absolutePath]
+        entries = cached?.entries.orEmpty()
+        loading = cached == null
         job = viewModelScope.launch {
             val listed = withContext(Dispatchers.IO) {
-                runCatching { dir.listFiles() }.getOrNull()?.map { file ->
-                    val directory = file.isDirectory
-                    val kind = when {
-                        directory -> EntryKind.FOLDER
-                        Media.isVideo(file.name) -> EntryKind.VIDEO
-                        else -> EntryKind.OTHER
-                    }
-                    BrowserEntry(file.absolutePath, file.name, kind, if (directory) 0 else file.length(), if (kind == EntryKind.VIDEO) Uri.fromFile(file).toString() else null)
-                }?.sortedWith(browserOrder)
+                val modified = dir.lastModified()
+                if (cached != null && cached.modified == modified && modified != 0L) cached.entries
+                else read(dir)?.also { cache[dir.absolutePath] = CachedFolder(modified, it) }
             }
             loading = false
             if (listed == null) message = "Нет доступа к папке. Разрешите доступ к файлам или проверьте формат диска."
-            else entries = listed
+            else if (listed !== entries) entries = listed
         }
     }
+
+    /**
+     * One attribute read per file. On Android 11+ USB disks sit behind FUSE, where each stat is a
+     * round trip; File.isDirectory() plus File.length() cost two and made big folders slow.
+     */
+    private fun read(dir: File): List<BrowserEntry>? = runCatching {
+        Files.newDirectoryStream(dir.toPath()).use { stream ->
+            stream.mapNotNull { path ->
+                val attributes = runCatching { Files.readAttributes(path, BasicFileAttributes::class.java) }.getOrNull() ?: return@mapNotNull null
+                val name = path.fileName.toString()
+                val kind = when {
+                    attributes.isDirectory -> EntryKind.FOLDER
+                    Media.isVideo(name) -> EntryKind.VIDEO
+                    else -> EntryKind.OTHER
+                }
+                val file = path.toFile()
+                BrowserEntry(file.absolutePath, name, kind, if (attributes.isDirectory) 0 else attributes.size(),
+                    if (kind == EntryKind.VIDEO) Uri.fromFile(file).toString() else null, attributes.lastModifiedTime().toMillis())
+            }
+        }
+    }.getOrNull()
 
     /** Goes one level up; false when already at the list of disks (the screen should close). */
     fun up(): Boolean {
@@ -211,7 +250,9 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
 
     fun toggleShowAll() { showAll = !showAll }
     fun search(text: String) { query = text.trim() }
-    fun refresh() { folder?.let(::openFolder) ?: showVolumes() }
+    fun refresh() {
+        folder?.let { cache.remove(it.absolutePath); openFolder(it) } ?: showVolumes()
+    }
 
     private fun playlistFrom(selected: BrowserEntry): PlayRequest {
         val videos = entries.filter { it.kind == EntryKind.VIDEO }
@@ -231,6 +272,14 @@ class LocalBrowserViewModel(application: Application) : AndroidViewModel(applica
 class NetworkBrowserViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("network", 0)
     private val servers = application.aurora.servers
+    val sort = SortPreference(application.getSharedPreferences("library", 0))
+    val files = FileActions(
+        SmbFiles, application.aurora.playback, viewModelScope,
+        folderOf = { url -> url.substringBeforeLast('/') + "/" },
+        changed = { cache.clear(); refresh() },
+    )
+    /** Listings of the last folders for going back; a server gives no cheap "changed?" check, so they expire. */
+    private val cache = HashMap<String, Pair<Long, List<SmbConnection.Entry>>>()
 
     var host by mutableStateOf(prefs.getString("host", "").orEmpty())
     var share by mutableStateOf(prefs.getString("share", "").orEmpty())
@@ -275,8 +324,11 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
 
     val visible: List<BrowserEntry> by derivedStateOf {
         val needle = query.lowercase(Locale.ROOT)
-        entries.filter { it.name.lowercase(Locale.ROOT).contains(needle) }
+        entries.filter { it.name.lowercase(Locale.ROOT).contains(needle) }.sortedFor(sort.mode)
     }
+
+    fun companionsOf(entry: BrowserEntry): List<String> =
+        if (entry.kind == EntryKind.VIDEO) Subtitles.matching(entry.name, subtitleUrls.keys) else emptyList()
 
     init {
         val active = SmbConnection.active
@@ -400,13 +452,15 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
         loading = true
         message = null
         entries = emptyList()
+        val cached = cache[url]?.takeIf { System.currentTimeMillis() - it.first < CACHE_MS }?.second
         job = viewModelScope.launch {
-            val listed = withContext(Dispatchers.IO) { runCatching { session.list(url) } }
+            val listed = if (cached != null) Result.success(cached)
+            else withContext(Dispatchers.IO) { runCatching { session.list(url) } }.onSuccess { cache[url] = System.currentTimeMillis() to it }
             loading = false
             listed.onSuccess { found ->
                 subtitleUrls = found.filter { it.subtitle }.associate { it.name to it.url }
                 entries = found.filter { it.directory || it.video }.map {
-                    BrowserEntry(it.url, it.name, if (it.directory) EntryKind.FOLDER else EntryKind.VIDEO, it.size, if (it.directory) null else it.url)
+                    BrowserEntry(it.url, it.name, if (it.directory) EntryKind.FOLDER else EntryKind.VIDEO, it.size, if (it.directory) null else it.url, it.modified)
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -438,7 +492,9 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
     }
 
     fun search(text: String) { query = text.trim() }
-    fun refresh() { folderUrl?.let(::openFolder) }
+    fun refresh() {
+        folderUrl?.let { cache.remove(it); openFolder(it) }
+    }
 
     // Discovery: NAS, Samba and macOS announce "_smb._tcp"; Windows usually does not.
 
@@ -483,6 +539,10 @@ class NetworkBrowserViewModel(application: Application) : AndroidViewModel(appli
             resolving = false
             resolveNext()
         }
+    }
+
+    private companion object {
+        const val CACHE_MS = 60_000L
     }
 
     override fun onCleared() {

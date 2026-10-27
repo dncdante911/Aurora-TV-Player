@@ -8,6 +8,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +53,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
@@ -125,11 +128,16 @@ interface PlayerActions {
     fun restart()
     fun closePanel()
     fun userActivity()
+    /** Mouse: a click on the timeline jumps there. */
+    fun seekToFraction(fraction: Float) {}
+    /** Mouse: a click on the picture shows or hides the controls. */
+    fun tapScreen() {}
 }
 
 @Composable
 fun PlayerOverlay(state: PlayerUiState, actions: PlayerActions) {
-    Box(Modifier.fillMaxSize()) {
+    // Buttons consume their clicks; only clicks on the picture itself reach this.
+    Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { actions.tapScreen() }) }) {
         val reconnecting = state.reconnecting
         if (reconnecting != null && state.error == null) {
             Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -284,6 +292,13 @@ private fun SeekBar(state: PlayerUiState, actions: PlayerActions, modifier: Modi
     val focused by interaction.collectIsFocusedAsState()
     Box(
         modifier.height(28.dp)
+            .pointerInput(Unit) {
+                // Click or drag along the bar: the target moves with the pointer, the player follows when released.
+                detectTapGestures(onTap = { actions.seekToFraction(it.x / size.width) })
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(onDragEnd = {}) { change, _ -> actions.seekToFraction(change.position.x / size.width) }
+            }
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 val repeat = event.nativeKeyEvent.repeatCount

@@ -82,7 +82,7 @@ fun VideoCard(
     Surface(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier.width(width),
+        modifier = modifier.pointerClick(onClick, onLongClick).width(width),
         shape = ClickableSurfaceDefaults.shape(CardShape),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Aurora.panel, contentColor = Aurora.white,
